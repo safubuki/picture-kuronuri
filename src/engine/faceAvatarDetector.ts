@@ -1,7 +1,8 @@
 /**
- * 顔写真およびチャット画面アバター（アイコン）の精密検出器
- * 1. window.FaceDetector (ネイティブ Shape Detection API)
- * 2. チャット画面メッセージ左端に整列する円形・正方形アバターのみをピンポイント検出
+ * 顔写真・実写人物アイコン検出器
+ * ユーザー指定: 「鈴」などの頭文字・イニシャルアイコンや単色アイコンは消さなくてよい。
+ * 消すべき対象は「本人の写真（実写・顔写真）」のみ。
+ * 吹き出し境界や本文を誤検出して文字を潰す事故を完全に根絶する。
  */
 
 export interface DetectedFaceOrAvatar {
@@ -18,7 +19,7 @@ export interface DetectedFaceOrAvatar {
 }
 
 /**
- * 画像から顔およびチャットアバターを検出する
+ * 画像から本人の顔写真・実写アバターのみをピンポイント検出する
  * @param imageElement 対象画像
  * @param knownAvatars 事前に定義されたアバター座標（サンプル画像等）
  */
@@ -28,21 +29,21 @@ export async function detectFacesAndAvatars(
 ): Promise<DetectedFaceOrAvatar[]> {
   const results: DetectedFaceOrAvatar[] = [];
 
-  // 事前定義アバターがある場合（サンプル画像等）
+  // 1. 事前定義アバターがある場合（テスト用サンプル等）
   if (knownAvatars && knownAvatars.length > 0) {
     for (let i = 0; i < knownAvatars.length; i++) {
       results.push({
         id: `avatar-known-${i}`,
-        type: "avatar",
+        type: "face",
         rect: knownAvatars[i],
         confidence: 0.99,
-        label: "チャットアイコン"
+        label: "顔写真"
       });
     }
     return results;
   }
 
-  // 1. ネイティブ FaceDetector API の試行（Chrome等で対応している場合）
+  // 2. ネイティブ FaceDetector API の試行（Android Chrome / Chromium でサポート）
   if (typeof window !== "undefined" && "FaceDetector" in window) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,13 +71,13 @@ export async function detectFacesAndAvatars(
     }
   }
 
-  // 2. チャット画面特有のアバター（アイコン）幾何検出
-  // 左端の固定縦カラム（X: 3%〜12%）にある円形・正方形アイコンのみを精密スキャン
-  const avatarResults = detectChatAvatarsStrict(imageElement);
-  for (const avatar of avatarResults) {
-    const isOverlapped = results.some(r => isOverlap(r.rect, avatar.rect, 0.3));
+  // 3. 実写顔写真（Photo Avatar）の色彩・肌色・テクスチャ解析
+  // ※ 「鈴」「山」などの頭文字アイコンや単色塗りつぶしアイコン、吹き出し境界は除外
+  const photoAvatars = detectRealPhotoAvatars(imageElement);
+  for (const photo of photoAvatars) {
+    const isOverlapped = results.some(r => isOverlap(r.rect, photo.rect, 0.3));
     if (!isOverlapped) {
-      results.push(avatar);
+      results.push(photo);
     }
   }
 
@@ -100,13 +101,14 @@ function isOverlap(
 }
 
 /**
- * チャットアバターの厳格検出
- * 余白や背景を絶対に誤検出しないよう、左端の垂直カラムに限定し高閾値で判定
+ * 実写の顔写真（Photo）のみを精密検出
+ * - 肌色ピクセルの集中度
+ * - 実写写真特有のカラー分散（単色や単純な白文字イニシャルアイコンを完全除外）
  */
-function detectChatAvatarsStrict(
+function detectRealPhotoAvatars(
   source: HTMLImageElement | HTMLCanvasElement
 ): DetectedFaceOrAvatar[] {
-  const avatars: DetectedFaceOrAvatar[] = [];
+  const results: DetectedFaceOrAvatar[] = [];
   const width = source.width;
   const height = source.height;
 
@@ -130,44 +132,34 @@ function detectChatAvatarsStrict(
   const imgData = sctx.getImageData(0, 0, sw, sh);
   const data = imgData.data;
 
-  // グレースケール化
-  const gray = new Uint8Array(sw * sh);
-  for (let i = 0; i < data.length; i += 4) {
-    gray[i / 4] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-  }
-
+  // アバター候補サイズ（画面幅の6%〜12%）
   const sizes = [
     Math.round(sw * 0.07),
-    Math.round(sw * 0.09),
-    Math.round(sw * 0.11)
-  ].filter((s) => s >= 18);
+    Math.round(sw * 0.095),
+    Math.round(sw * 0.12)
+  ].filter(s => s >= 20);
 
-  const startY = Math.round(sh * 0.11);
+  // チャットアイコンが存在する左端カラム（X: 3%〜14%）
+  const xs = [0.03, 0.05, 0.07, 0.09, 0.11].map(r => Math.round(sw * r));
+  const startY = Math.round(sh * 0.10);
   const endY = Math.round(sh * 0.90);
-  // 写真左端のチャットアイコン用カラム（吹き出し内部まで誤侵入しないよう0.15までに限定）
-  const xs = [0.04, 0.06, 0.08, 0.10, 0.12, 0.14].map((r) => Math.round(sw * r));
 
   interface Candidate {
-    origX: number;
-    origY: number;
-    origSize: number;
+    x: number;
+    y: number;
+    size: number;
     score: number;
   }
   const candidates: Candidate[] = [];
 
-  for (const avatarSize of sizes) {
-    const stepY = Math.max(10, Math.round(avatarSize * 0.3));
-    for (const fixedX of xs) {
-      if (fixedX + avatarSize >= sw) continue;
-      for (let y = startY; y < endY - avatarSize; y += stepY) {
-        const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
-        if (score >= 68) {
-          candidates.push({
-            origX: Math.round(fixedX / scale),
-            origY: Math.round(y / scale),
-            origSize: Math.round(avatarSize / scale),
-            score
-          });
+  for (const size of sizes) {
+    const stepY = Math.max(12, Math.round(size * 0.4));
+    for (const x of xs) {
+      if (x + size >= sw) continue;
+      for (let y = startY; y < endY - size; y += stepY) {
+        const score = evaluateRealPhotoFace(data, sw, sh, x, y, size);
+        if (score >= 70) {
+          candidates.push({ x, y, size, score });
         }
       }
     }
@@ -177,35 +169,44 @@ function detectChatAvatarsStrict(
   candidates.sort((a, b) => b.score - a.score);
 
   for (const c of candidates) {
-    const rect = { x: c.origX, y: c.origY, width: c.origSize, height: c.origSize };
-    const isDup = avatars.some((a) => {
-      if (isOverlap(a.rect, rect, 0.2)) return true;
-      const sameCol = Math.abs(a.rect.x - rect.x) < rect.width * 0.8;
-      // チャットメッセージは縦に十分な間隔があるため、同一列のアバター同士は最低でも縦に1.8倍以上離れている必要がある
-      const closeY = Math.abs(a.rect.y - rect.y) < Math.max(rect.height * 1.8, Math.round(height * 0.10));
+    const origRect = {
+      x: Math.round(c.x / scale),
+      y: Math.round(c.y / scale),
+      width: Math.round(c.size / scale),
+      height: Math.round(c.size / scale)
+    };
+
+    const isDup = results.some(r => {
+      if (isOverlap(r.rect, origRect, 0.25)) return true;
+      // 同一列なら縦にアバター高さの1.8倍以上離れていること
+      const sameCol = Math.abs(r.rect.x - origRect.x) < origRect.width * 0.8;
+      const closeY = Math.abs(r.rect.y - origRect.y) < origRect.height * 1.8;
       return sameCol && closeY;
     });
+
     if (!isDup) {
-      avatars.push({
-        id: `avatar-strict-${c.origX}-${c.origY}`,
-        type: "avatar",
-        rect,
-        confidence: Math.min(0.98, c.score / 100),
-        label: "チャットアイコン"
+      results.push({
+        id: `face-photo-${origRect.x}-${origRect.y}`,
+        type: "face",
+        rect: origRect,
+        confidence: Math.min(0.96, c.score / 100),
+        label: "顔写真"
       });
     }
-    // 1画面のアバター数は最大でも5個程度
-    if (avatars.length >= 5) break;
+
+    if (results.length >= 4) break;
   }
 
-  return avatars;
+  return results;
 }
 
 /**
- * 候補領域が本物のチャットアイコン（明確な円形・色変化）であるかを厳格判定
+ * 領域が本物の「実写顔写真」であるかを判定
+ * - 単色（オレンジ、青、緑等）背景＋文字（「鈴」「山」等）→ 0点（確実に除外）
+ * - 吹き出し白地・本文テキスト行 → 0点（確実に除外）
+ * - 人物の肌色ピクセルが一定割合存在し、自然な写真の色彩分散がある場合のみ高スコア
  */
-function evaluateStrictAvatar(
-  gray: Uint8Array,
+function evaluateRealPhotoFace(
   rgba: Uint8ClampedArray,
   sw: number,
   sh: number,
@@ -215,115 +216,108 @@ function evaluateStrictAvatar(
 ): number {
   if (x + size >= sw || y + size >= sh) return 0;
 
-  let sum = 0;
-  let count = 0;
-  let satSum = 0;
+  let skinPixels = 0;
+  let totalInnerPixels = 0;
+
+  const rVals: number[] = [];
+  const gVals: number[] = [];
+  const bVals: number[] = [];
+
   const half = Math.floor(size / 2);
   const cx = x + half;
   const cy = y + half;
-  const innerR = half * 0.72;
+  const innerR = half * 0.82;
   const innerR2 = innerR * innerR;
 
-  for (let dy = -half; dy <= half; dy += 1) {
-    for (let dx = -half; dx <= half; dx += 1) {
-      if (dx * dx + dy * dy > innerR2) continue;
+  for (let dy = -half; dy <= half; dy++) {
+    for (let dx = -half; dx <= half; dx++) {
+      if (dx * dx + dy * dy > innerR2) continue; // 円形内部のみ検査
       const px = cx + dx;
       const py = cy + dy;
       if (px < 0 || px >= sw || py < 0 || py >= sh) continue;
-      const val = gray[py * sw + px];
-      sum += val;
-      count++;
+
       const i = (py * sw + px) * 4;
       const r = rgba[i];
       const g = rgba[i + 1];
       const b = rgba[i + 2];
-      const maxc = Math.max(r, g, b);
-      const minc = Math.min(r, g, b);
-      satSum += maxc === 0 ? 0 : (maxc - minc) / maxc;
+
+      rVals.push(r);
+      gVals.push(g);
+      bVals.push(b);
+      totalInnerPixels++;
+
+      // 人物の肌色判定（標準的なPeer et al. 肌色検出ルール）
+      // R > 95, G > 40, B > 20, max - min > 15, |R - G| > 15, R > G, R > B
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const isSkin =
+        r > 95 &&
+        g > 40 &&
+        b > 20 &&
+        (maxC - minC) > 15 &&
+        Math.abs(r - g) > 12 &&
+        r > g &&
+        r > b;
+
+      if (isSkin) {
+        skinPixels++;
+      }
     }
   }
 
-  if (count === 0) return 0;
-  const mean = sum / count;
-  const sat = satSum / count;
+  if (totalInnerPixels < 40) return 0;
 
-  // 真っ暗（机の影・黒ベゼル）や真っ白（背景）はアバターではない
-  if (mean < 35 || mean > 245) return 0;
-  // カラーアイコン（彩度あり）またはグレーアイコン
-  if (sat < 0.08 && (mean < 60 || mean > 210)) return 0;
+  const skinRatio = skinPixels / totalInnerPixels;
+  // 本人の顔写真であれば、顔の肌色が最低でも15%以上含まれる
+  // 「鈴」「山」などの頭文字アイコン（単色ベタ塗り＋白文字）や白地吹き出しは肌色条件で完全に0点になる
+  if (skinRatio < 0.15) return 0;
 
-  // 8方向の円周エッジ（全方位に背景とのコントラストがあるか）
-  const r0 = half * 0.75;
-  const r1 = half * 1.15;
-  let dirMatches = 0;
-  let totalEdge = 0;
+  // 色彩分散（単色塗りつぶし・単純ベタ塗りの除外）
+  let rSum = 0;
+  let gSum = 0;
+  let bSum = 0;
+  for (let i = 0; i < totalInnerPixels; i++) {
+    rSum += rVals[i];
+    gSum += gVals[i];
+    bSum += bVals[i];
+  }
+  const rMean = rSum / totalInnerPixels;
+  const gMean = gSum / totalInnerPixels;
+  const bMean = bSum / totalInnerPixels;
 
-  // 4象限（上・下・左・右）それぞれでエッジが存在するかフラグ
-  let hasTopEdge = false;
-  let hasBottomEdge = false;
-  let hasLeftEdge = false;
-  let hasRightEdge = false;
+  let rVar = 0;
+  let gVar = 0;
+  let bVar = 0;
+  for (let i = 0; i < totalInnerPixels; i++) {
+    rVar += Math.pow(rVals[i] - rMean, 2);
+    gVar += Math.pow(gVals[i] - gMean, 2);
+    bVar += Math.pow(bVals[i] - bMean, 2);
+  }
+  const stdDev = Math.sqrt((rVar + gVar + bVar) / (3 * totalInnerPixels));
 
+  // 実写の顔写真は陰影・髪・目・口・服などがあるため、標準偏差が20以上になる
+  // 単色背景のイニシャルアイコンは分散が低いため除外
+  if (stdDev < 20) return 0;
+
+  // 円周外枠とのコントラスト（丸いアイコン枠として存在するか）
+  const rOuter = half * 1.15;
+  let borderContrast = 0;
+  let borderPoints = 0;
   for (let a = 0; a < 8; a++) {
     const rad = (a / 8) * Math.PI * 2;
-    const cosA = Math.cos(rad);
-    const sinA = Math.sin(rad);
-    const xOut = Math.round(cx + cosA * r1);
-    const yOut = Math.round(cy + sinA * r1);
-    const xIn = Math.round(cx + cosA * r0);
-    const yIn = Math.round(cy + sinA * r0);
+    const xOut = Math.round(cx + Math.cos(rad) * rOuter);
+    const yOut = Math.round(cy + Math.sin(rad) * rOuter);
     if (xOut < 0 || yOut < 0 || xOut >= sw || yOut >= sh) continue;
-    if (xIn < 0 || yIn < 0 || xIn >= sw || yIn >= sh) continue;
-    const diff = Math.abs(gray[yOut * sw + xOut] - gray[yIn * sw + xIn]);
-    totalEdge += diff;
-    if (diff >= 14) {
-      dirMatches++;
-      if (sinA < -0.3) hasTopEdge = true;
-      if (sinA > 0.3) hasBottomEdge = true;
-      if (cosA < -0.3) hasLeftEdge = true;
-      if (cosA > 0.3) hasRightEdge = true;
-    }
+    const idxOut = (yOut * sw + xOut) * 4;
+    const lumOut = 0.299 * rgba[idxOut] + 0.587 * rgba[idxOut + 1] + 0.114 * rgba[idxOut + 2];
+    const lumIn = 0.299 * rMean + 0.587 * gMean + 0.114 * bMean;
+    borderContrast += Math.abs(lumOut - lumIn);
+    borderPoints++;
   }
 
-  // 吹き出しの縦境界線（左右しかエッジがない）や横罫線を除外するため、上・下・左・右すべてにエッジがあることを必須化
-  if (!hasTopEdge || !hasBottomEdge || !hasLeftEdge || !hasRightEdge) return 0;
+  const avgContrast = borderPoints > 0 ? borderContrast / borderPoints : 0;
+  if (avgContrast < 12) return 0;
 
-  // 8方向中少なくとも6方向でエッジが存在すること
-  if (dirMatches < 6) return 0;
-  const avgRing = totalEdge / 8;
-  if (avgRing < 18) return 0;
-
-  // チャットアイコンの右側（吹き出し領域）の存在確認
-  const rightX0 = Math.min(sw - 1, x + size + 2);
-  const rightX1 = Math.min(sw - 1, x + Math.round(size * 2.0));
-  if (rightX1 > rightX0) {
-    let rightSum = 0;
-    let rightCount = 0;
-    for (let rx = rightX0; rx <= rightX1; rx += 3) {
-      rightSum += gray[cy * sw + rx];
-      rightCount++;
-    }
-    if (rightCount > 0) {
-      const rightMean = rightSum / rightCount;
-      if (rightMean < 40) return 0; // 右側が机や枠線なら除外
-    }
-  }
-
-  // 内部が文字の密集（横方向エッジ過多）でないことを確認
-  let horizEdge = 0;
-  let heN = 0;
-  for (let dy = -Math.floor(innerR); dy <= innerR; dy += 2) {
-    for (let dx = -Math.floor(innerR); dx < innerR; dx += 2) {
-      if (dx * dx + dy * dy > innerR2) continue;
-      const px = cx + dx;
-      const py = cy + dy;
-      if (px < 1 || px >= sw - 1 || py < 0 || py >= sh) continue;
-      horizEdge += Math.abs(gray[py * sw + px + 1] - gray[py * sw + px - 1]);
-      heN++;
-    }
-  }
-  const textish = heN > 0 ? horizEdge / heN : 0;
-  if (textish > 32) return 0; // 文字の密集領域ならアバターではない
-
-  return Math.min(98, Math.round(dirMatches * 8 + avgRing * 1.2 + sat * 30));
+  const score = Math.round(skinRatio * 50 + Math.min(30, stdDev) + Math.min(20, avgContrast));
+  return Math.min(95, score);
 }

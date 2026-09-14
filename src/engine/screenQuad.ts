@@ -279,45 +279,51 @@ function largestBrightBlob(binary: Uint8Array, w: number, h: number): BlobExtrem
   return best;
 }
 
-function detectBlobQuad(gray: Uint8Array, w: number, h: number): QuadDetectionResult | null {
-  const padX = Math.max(2, Math.floor(w * 0.06));
-  const padY = Math.max(2, Math.floor(h * 0.06));
-  let borderSum = 0;
-  let borderN = 0;
-  let innerSum = 0;
-  let innerN = 0;
+function otsuThreshold(gray: Uint8Array): number {
+  const hist = new Int32Array(256);
+  for (let i = 0; i < gray.length; i++) {
+    hist[gray[i]]++;
+  }
+  const total = gray.length;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
 
-  for (let y = 0; y < h; y++) {
-    const innerY = y >= h * 0.25 && y <= h * 0.75;
-    for (let x = 0; x < w; x++) {
-      const v = gray[y * w + x];
-      const isBorder = x < padX || x >= w - padX || y < padY || y >= h - padY;
-      if (isBorder) {
-        borderSum += v;
-        borderN++;
-      } else if (innerY && x >= w * 0.25 && x <= w * 0.75) {
-        innerSum += v;
-        innerN++;
-      }
+  let sumB = 0;
+  let wB = 0;
+  let maxVar = 0;
+  let threshold = 128;
+
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const betweenVar = wB * wF * (mB - mF) * (mB - mF);
+    if (betweenVar > maxVar) {
+      maxVar = betweenVar;
+      threshold = t;
     }
   }
-  if (borderN === 0 || innerN === 0) return null;
-  const borderMean = borderSum / borderN;
-  const innerMean = innerSum / innerN;
-  if (innerMean - borderMean < 16) return null;
+  return threshold;
+}
 
-  const t = (borderMean + innerMean) * 0.5;
-  let binary: Uint8Array = new Uint8Array(w * h);
+function detectBlobQuad(gray: Uint8Array, w: number, h: number): QuadDetectionResult | null {
+  // 大津の自動二値化（Otsu）により、照明環境に左右されず発光画面・書類のBlobを確実に分離
+  const otsuT = otsuThreshold(gray);
+  const binary = new Uint8Array(w * h);
   for (let i = 0; i < gray.length; i++) {
-    binary[i] = gray[i] > t ? 1 : 0;
+    binary[i] = gray[i] > otsuT ? 1 : 0;
   }
-  binary = morphCloseBinary(binary, w, h);
-  binary = morphCloseBinary(binary, w, h);
+  const closed = morphCloseBinary(morphCloseBinary(binary, w, h), w, h);
 
-  const blob = largestBrightBlob(binary, w, h);
+  const blob = largestBrightBlob(closed, w, h);
   if (!blob) return null;
   const frac = blob.area / (w * h);
-  if (frac < 0.16 || frac > 0.96) return null;
+  if (frac < 0.15 || frac > 0.98) return null;
 
   const corners: QuadCorners = {
     topLeft: blob.tl,
@@ -327,7 +333,7 @@ function detectBlobQuad(gray: Uint8Array, w: number, h: number): QuadDetectionRe
   };
   if (!isValidDocumentQuad(corners, w, h)) return null;
 
-  const conf = clamp(0.45 + frac * 0.4 + Math.min(0.2, (innerMean - borderMean) / 200), 0, 0.95);
+  const conf = clamp(0.60 + frac * 0.35, 0, 0.98);
   return { corners, confidence: conf, method: "blob" };
 }
 
@@ -794,34 +800,31 @@ export function detectDocumentCornersDetailed(
   const totalArea = origW * origH;
   const areaRatio = area / totalArea;
 
-  // 1. "content" (本文文字群のバウンディングボックス) の場合はヘッダーや下部が切り落とされるため、
-  //    台形歪みのない正面ショットなら全体枠、台形歪みがあるなら外側に拡張
-  if (found.method === "content" || areaRatio < 0.72) {
-    // 面積が小さすぎる（画面内の吹き出し等を誤検出している）場合は、本文削れ防止のため全体枠を初期値にする
+  // 1. "content" (文字行バウンディングボックス) のみの場合は、ヘッダー削れ防止のため全体枠にフォールバック
+  if (found.method === "content") {
     return fallback;
   }
 
-  // 2. ピンが上端や下端の本文に食い込まないよう、端から近ければ安全に画像端まで外側展開
-  const padX = Math.round(origW * 0.015);
-  const padY = Math.round(origH * 0.015);
+  // 2. 面積が極端に小さい（画像全体の15%未満）か大きすぎる（99%超）場合は全体枠にフォールバック
+  if (areaRatio < 0.15 || areaRatio > 0.99) {
+    return fallback;
+  }
+
+  // 3. 検出された四隅ピンを中心から2.5%外側にセーフ展開し、本文やヘッダーが切り落とされるのを防止
+  const cx = (tl.x + tr.x + br.x + bl.x) / 4;
+  const cy = (tl.y + tr.y + br.y + bl.y) / 4;
+  const expand = 1.025; // 中心から2.5%外側に押し広げて安全マージンを確保
+
+  const expandPt = (p: Point2D): Point2D => ({
+    x: clamp(Math.round(cx + (p.x - cx) * expand), 0, origW),
+    y: clamp(Math.round(cy + (p.y - cy) * expand), 0, origH)
+  });
 
   const safeCorners: QuadCorners = {
-    topLeft: {
-      x: tl.x < origW * 0.12 ? padX : tl.x,
-      y: tl.y < origH * 0.12 ? padY : tl.y
-    },
-    topRight: {
-      x: tr.x > origW * 0.88 ? origW - padX : tr.x,
-      y: tr.y < origH * 0.12 ? padY : tr.y
-    },
-    bottomRight: {
-      x: br.x > origW * 0.88 ? origW - padX : br.x,
-      y: br.y > origH * 0.88 ? origH - padY : br.y
-    },
-    bottomLeft: {
-      x: bl.x < origW * 0.12 ? padX : bl.x,
-      y: bl.y > origH * 0.88 ? origH - padY : bl.y
-    }
+    topLeft: expandPt(tl),
+    topRight: expandPt(tr),
+    bottomRight: expandPt(br),
+    bottomLeft: expandPt(bl)
   };
 
   return {

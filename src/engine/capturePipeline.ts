@@ -11,7 +11,6 @@ import {
   quadNeedsWarp,
   rotateCanvasByAngle
 } from "./autoDeskew";
-import { analyzeOcrSource, enhanceColorImage } from "./ocrPreprocess";
 
 export interface CaptureCorrectionResult {
   image: HTMLImageElement;
@@ -123,14 +122,7 @@ export async function autoCorrectCapturedPhoto(
   const deskewAngle = deskewed.angle;
   console.log("[autoCorrectCapturedPhoto] Deskew pass:", JSON.stringify({ deskewAngle }));
 
-  const analysis = analyzeOcrSource(work);
-  let enhanced = false;
-  if (analysis.isLikelyScreenPhoto || appliedPerspective || Math.abs(deskewAngle) >= 0.5) {
-    onProgress?.("ガイドフィルタでモアレ除去・画質を整えています...", 0.22);
-    await yieldFrame();
-    work = enhanceColorImage(work);
-    enhanced = true;
-  }
+  const enhanced = false;
 
   const skipped =
     !appliedPerspective && Math.abs(deskewAngle) < 0.2 && !enhanced;

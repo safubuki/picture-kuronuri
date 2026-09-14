@@ -1065,10 +1065,7 @@ function initEvents(): void {
         correctedImg = await rotateAndDeskewImage(correctedImg, -angle);
       }
 
-      // 3. モアレ低減・局所コントラスト・文字エッジ強調
-      correctedImg = await enhanceImageForOcr(correctedImg);
-
-      // 4. 台形補正モード終了
+      // 3. 台形補正モード終了（原画の美しいクリアな画質を100%維持）
       isPerspectiveMode = false;
       perspectiveBar.style.display = "none";
       perspectiveCorners = null;
