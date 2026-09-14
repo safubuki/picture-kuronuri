@@ -3,6 +3,14 @@
  * 自動傾き検出 (Auto-Deskew) および 台形透視変換 (Perspective Transform)
  */
 
+import {
+  detectDocumentCornersDetailed,
+  quadNeedsWarp
+} from "./screenQuad";
+
+export type { QuadDetectionResult, QuadMethod } from "./screenQuad";
+export { detectDocumentCornersDetailed, quadNeedsWarp };
+
 export interface Point2D {
   x: number;
   y: number;
@@ -16,95 +24,124 @@ export interface QuadCorners {
 }
 
 /**
- * 水平投影プロファイル分散法 (Horizontal Projection Profile Method)
- * テキスト行のエッジが水平に揃った時、行方向の投影ヒストグラムの分散が最大になる原理を利用。
- * AIを一切使わず、-20°〜+20°の傾き角度を0.5°精度で爆速自動検出する。
+ * 文字行の傾き検出（粗探索＋0.1°精密探索＋勾配方位の照合）
  */
 export function detectImageDeskewAngle(
   source: HTMLImageElement | HTMLCanvasElement,
-  minAngle: number = -15,
-  maxAngle: number = 15,
-  step: number = 0.5
+  minAngle: number = -18,
+  maxAngle: number = 18,
+  _step: number = 0.5
 ): number {
   const origW = source.width;
   const origH = source.height;
 
-  // 高速化のため、幅400px前後に縮小したキャンバスで計算
-  const scale = Math.min(1, 400 / origW);
+  const scale = Math.min(1, 480 / origW);
   const w = Math.round(origW * scale);
   const h = Math.round(origH * scale);
+  if (w < 40 || h < 40) return 0;
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return 0;
-
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0, w, h);
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
 
-  // 1. ソーベル垂直エッジ（行の輪郭）の二値化マップを抽出
   const gray = new Uint8Array(w * h);
-  for (let i = 0; i < data.length; i += 4) {
-    gray[i / 4] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] + 0.5;
   }
 
-  // 縦方向のエッジ（テキスト行の上下の境界線）を検出
-  const edges = new Uint8Array(w * h);
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 0; x < w; x++) {
-      const diff = Math.abs(gray[(y + 1) * w + x] - gray[(y - 1) * w + x]);
-      edges[y * w + x] = diff > 25 ? 1 : 0;
+  const x0 = Math.floor(w * 0.08);
+  const x1 = Math.ceil(w * 0.92);
+  const y0 = Math.floor(h * 0.08);
+  const y1 = Math.ceil(h * 0.92);
+
+  const edgeXY: number[] = [];
+  const gradBins = new Float32Array(41);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const gy = gray[(y + 1) * w + x] - gray[(y - 1) * w + x];
+      const gx = gray[y * w + (x + 1)] - gray[y * w + (x - 1)];
+      const mag = Math.abs(gx) + Math.abs(gy);
+      if (mag > 28) {
+        edgeXY.push(x, y);
+        const lineDeg = (Math.atan2(gx, gy) * 180) / Math.PI;
+        const clamped = Math.max(-20, Math.min(20, lineDeg));
+        const bin = Math.round(clamped + 20);
+        gradBins[bin] += mag;
+      }
+    }
+  }
+  if (edgeXY.length < 80) return 0;
+
+  let gradPeak = 0;
+  let gradMax = -1;
+  for (let i = 0; i < gradBins.length; i++) {
+    const sm =
+      (gradBins[Math.max(0, i - 1)] + gradBins[i] * 2 + gradBins[Math.min(40, i + 1)]) / 4;
+    if (sm > gradMax) {
+      gradMax = sm;
+      gradPeak = i - 20;
     }
   }
 
-  // 2. 角度ごとの水平投影プロファイルの分散を探索
-  let bestAngle = 0;
-  let maxVariance = -1;
-
-  // 中心座標
   const cx = w / 2;
   const cy = h / 2;
+  const nEdge = edgeXY.length / 2;
 
-  // 計算ステップ
-  for (let angle = minAngle; angle <= maxAngle; angle += step) {
+  const varianceAt = (angle: number): number => {
     const rad = (angle * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
-
-    // 回転後のYヒストグラム
     const hist = new Float32Array(h);
-    let totalSamples = 0;
-
-    // サンプリング（ステップ2で高速化）
-    for (let y = 10; y < h - 10; y += 2) {
-      for (let x = 10; x < w - 10; x += 2) {
-        if (edges[y * w + x] === 1) {
-          // 回転後のY座標
-          const rotY = Math.round(-(x - cx) * sin + (y - cy) * cos + cy);
-          if (rotY >= 0 && rotY < h) {
-            hist[rotY]++;
-            totalSamples++;
-          }
-        }
+    let total = 0;
+    for (let i = 0; i < nEdge; i++) {
+      const x = edgeXY[i * 2];
+      const y = edgeXY[i * 2 + 1];
+      const rotY = Math.round(-(x - cx) * sin + (y - cy) * cos + cy);
+      if (rotY >= 0 && rotY < h) {
+        hist[rotY]++;
+        total++;
       }
     }
-
-    if (totalSamples === 0) continue;
-
-    // 分散の計算
-    const mean = totalSamples / h;
+    if (total === 0) return -1;
+    const mean = total / h;
     let variance = 0;
     for (let i = 0; i < h; i++) {
-      const diff = hist[i] - mean;
-      variance += diff * diff;
+      const d = hist[i] - mean;
+      variance += d * d;
     }
+    return variance;
+  };
 
-    if (variance > maxVariance) {
-      maxVariance = variance;
+  let bestAngle = 0;
+  let maxVar = -1;
+  for (let angle = minAngle; angle <= maxAngle; angle += 1) {
+    const v = varianceAt(angle);
+    if (v > maxVar) {
+      maxVar = v;
       bestAngle = angle;
     }
+  }
+
+  const fineLo = Math.max(minAngle, bestAngle - 1.6);
+  const fineHi = Math.min(maxAngle, bestAngle + 1.6);
+  for (let angle = fineLo; angle <= fineHi + 1e-6; angle += 0.1) {
+    const a = Math.round(angle * 10) / 10;
+    const v = varianceAt(a);
+    if (v > maxVar) {
+      maxVar = v;
+      bestAngle = a;
+    }
+  }
+
+  if (Math.abs(bestAngle - gradPeak) < 1.5) {
+    bestAngle = Math.round((bestAngle * 0.65 + gradPeak * 0.35) * 10) / 10;
   }
 
   return bestAngle;
@@ -129,8 +166,14 @@ export function applyPerspectiveTransform(
   const leftH = Math.hypot(corners.bottomLeft.x - corners.topLeft.x, corners.bottomLeft.y - corners.topLeft.y);
   const rightH = Math.hypot(corners.bottomRight.x - corners.topRight.x, corners.bottomRight.y - corners.topRight.y);
 
-  const outW = Math.round(outputWidth || Math.max(topW, bottomW, 300));
-  const outH = Math.round(outputHeight || Math.max(leftH, rightH, 400));
+  let outW = Math.round(outputWidth || Math.max(topW, bottomW, 300));
+  let outH = Math.round(outputHeight || Math.max(leftH, rightH, 400));
+  const maxSide = 2400;
+  if (outW > maxSide || outH > maxSide) {
+    const s = maxSide / Math.max(outW, outH);
+    outW = Math.max(300, Math.round(outW * s));
+    outH = Math.max(400, Math.round(outH * s));
+  }
 
   const outCanvas = document.createElement("canvas");
   outCanvas.width = outW;
@@ -178,33 +221,90 @@ export function applyPerspectiveTransform(
 
       const outIdx = (dy * outW + dx) * 4;
 
-      if (sx >= 0 && sx < origW - 1 && sy >= 0 && sy < origH - 1) {
-        // 双線形補間 (Bilinear Interpolation)
+      if (sx >= 1 && sx < origW - 2 && sy >= 1 && sy < origH - 2) {
+        sampleCatmullRom(inPixels, origW, sx, sy, outPixels, outIdx);
+      } else if (sx >= 0 && sx < origW - 1 && sy >= 0 && sy < origH - 1) {
         const x0 = Math.floor(sx);
         const y0 = Math.floor(sy);
         const x1 = x0 + 1;
         const y1 = y0 + 1;
         const fx = sx - x0;
         const fy = sy - y0;
-
         const idx00 = (y0 * origW + x0) * 4;
         const idx10 = (y0 * origW + x1) * 4;
         const idx01 = (y1 * origW + x0) * 4;
         const idx11 = (y1 * origW + x1) * 4;
-
         for (let c = 0; c < 4; c++) {
           const top = inPixels[idx00 + c] * (1 - fx) + inPixels[idx10 + c] * fx;
           const bottom = inPixels[idx01 + c] * (1 - fx) + inPixels[idx11 + c] * fx;
-          outPixels[outIdx + c] = Math.round(top * (1 - fy) + bottom * fy);
+          outPixels[outIdx + c] = top * (1 - fy) + bottom * fy + 0.5;
         }
       } else {
-        outPixels[outIdx + 3] = 0; // 範囲外は透明
+        outPixels[outIdx] = 11;
+        outPixels[outIdx + 1] = 13;
+        outPixels[outIdx + 2] = 18;
+        outPixels[outIdx + 3] = 255;
       }
     }
   }
 
   outCtx.putImageData(outData, 0, 0);
   return outCanvas;
+}
+
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t
+  );
+}
+
+function sampleCatmullRom(
+  data: Uint8ClampedArray,
+  w: number,
+  x: number,
+  y: number,
+  out: Uint8ClampedArray,
+  oi: number
+): void {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  for (let c = 0; c < 4; c++) {
+    const col0 = catmullRom(
+      data[((y0 - 1) * w + (x0 - 1)) * 4 + c],
+      data[((y0 - 1) * w + x0) * 4 + c],
+      data[((y0 - 1) * w + (x0 + 1)) * 4 + c],
+      data[((y0 - 1) * w + (x0 + 2)) * 4 + c],
+      fx
+    );
+    const col1 = catmullRom(
+      data[(y0 * w + (x0 - 1)) * 4 + c],
+      data[(y0 * w + x0) * 4 + c],
+      data[(y0 * w + (x0 + 1)) * 4 + c],
+      data[(y0 * w + (x0 + 2)) * 4 + c],
+      fx
+    );
+    const col2 = catmullRom(
+      data[((y0 + 1) * w + (x0 - 1)) * 4 + c],
+      data[((y0 + 1) * w + x0) * 4 + c],
+      data[((y0 + 1) * w + (x0 + 1)) * 4 + c],
+      data[((y0 + 1) * w + (x0 + 2)) * 4 + c],
+      fx
+    );
+    const col3 = catmullRom(
+      data[((y0 + 2) * w + (x0 - 1)) * 4 + c],
+      data[((y0 + 2) * w + x0) * 4 + c],
+      data[((y0 + 2) * w + (x0 + 1)) * 4 + c],
+      data[((y0 + 2) * w + (x0 + 2)) * 4 + c],
+      fx
+    );
+    const v = catmullRom(col0, col1, col2, col3, fy);
+    out[oi + c] = v < 0 ? 0 : v > 255 ? 255 : v + 0.5;
+  }
 }
 
 /**
@@ -263,155 +363,37 @@ function computeHomography(src: Point2D[], dst: Point2D[]): number[] {
  * 画像からチャット画面や書類の四隅（輪郭）をAI不使用・純粋画像処理で自動検出
  */
 export function detectDocumentCornersAuto(source: HTMLImageElement | HTMLCanvasElement): QuadCorners {
+  return detectDocumentCornersDetailed(source).corners;
+}
+
+/**
+ * Canvas 上で任意角度回転（中間パイプライン用・同期）
+ */
+export function rotateCanvasByAngle(
+  source: HTMLImageElement | HTMLCanvasElement,
+  angleDegrees: number
+): HTMLCanvasElement {
+  const radians = (angleDegrees * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
   const origW = source.width;
   const origH = source.height;
-
-  // デフォルト（画面全体の4%マージン）
-  const defaultCorners: QuadCorners = {
-    topLeft: { x: Math.round(origW * 0.04), y: Math.round(origH * 0.04) },
-    topRight: { x: Math.round(origW * 0.96), y: Math.round(origH * 0.04) },
-    bottomRight: { x: Math.round(origW * 0.96), y: Math.round(origH * 0.96) },
-    bottomLeft: { x: Math.round(origW * 0.04), y: Math.round(origH * 0.96) }
-  };
-
-  // 高速化のため、幅320px前後に縮小してエッジ解析
-  const scale = Math.min(1, 320 / origW);
-  const w = Math.round(origW * scale);
-  const h = Math.round(origH * scale);
-  if (w < 50 || h < 50) return defaultCorners;
+  const newW = Math.round(origW * cos + origH * sin);
+  const newH = Math.round(origW * sin + origH * cos);
 
   const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return defaultCorners;
-
-  ctx.drawImage(source, 0, 0, w, h);
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const data = imgData.data;
-
-  // 1. グレースケール変換
-  const gray = new Uint8Array(w * h);
-  for (let i = 0; i < data.length; i += 4) {
-    gray[i / 4] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-  }
-
-  // 2. Sobel勾配強度マップ
-  const edgeStrength = new Float32Array(w * h);
-  let totalEdge = 0;
-  let edgeCount = 0;
-
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      // 水平勾配
-      const gx =
-        -gray[(y - 1) * w + (x - 1)] + gray[(y - 1) * w + (x + 1)] +
-        -2 * gray[y * w + (x - 1)] + 2 * gray[y * w + (x + 1)] +
-        -gray[(y + 1) * w + (x - 1)] + gray[(y + 1) * w + (x + 1)];
-
-      // 垂直勾配
-      const gy =
-        -gray[(y - 1) * w + (x - 1)] - 2 * gray[(y - 1) * w + x] - gray[(y - 1) * w + (x + 1)] +
-        gray[(y + 1) * w + (x - 1)] + 2 * gray[(y + 1) * w + x] + gray[(y + 1) * w + (x + 1)];
-
-      const mag = Math.hypot(gx, gy);
-      edgeStrength[y * w + x] = mag;
-      totalEdge += mag;
-      edgeCount++;
-    }
-  }
-
-  const avgEdge = edgeCount > 0 ? totalEdge / edgeCount : 0;
-  // 強い輪郭エッジの閾値
-  const threshold = avgEdge * 1.8;
-
-  // 3. 有意なエッジ点群の収集
-  interface CandPoint {
-    x: number;
-    y: number;
-    weight: number;
-  }
-  const edgePoints: CandPoint[] = [];
-
-  // 外枠近傍（ノイズ防止のため外側2%は除外）
-  const padEdgeX = Math.floor(w * 0.02);
-  const padEdgeY = Math.floor(h * 0.02);
-
-  for (let y = padEdgeY; y < h - padEdgeY; y++) {
-    for (let x = padEdgeX; x < w - padEdgeX; x++) {
-      const val = edgeStrength[y * w + x];
-      if (val > threshold) {
-        edgePoints.push({ x, y, weight: val });
-      }
-    }
-  }
-
-  // エッジが少なすぎる場合はデフォルト
-  if (edgePoints.length < 40) {
-    return defaultCorners;
-  }
-
-  // 4. 四方向の極値探索 (Extreme Points / Convex Quad Fitting)
-  // 左上: x + y が最小
-  // 右上: x - y が最大
-  // 右下: x + y が最大
-  // 左下: y - x が最大
-  let minSum = Infinity;
-  let maxDiff = -Infinity;
-  let maxSum = -Infinity;
-  let maxYMinusX = -Infinity;
-
-  let bestTL = { x: 0, y: 0 };
-  let bestTR = { x: w, y: 0 };
-  let bestBR = { x: w, y: h };
-  let bestBL = { x: 0, y: h };
-
-  for (const pt of edgePoints) {
-    const sum = pt.x + pt.y;
-    const diff = pt.x - pt.y;
-    const yMinusX = pt.y - pt.x;
-
-    if (sum < minSum) {
-      minSum = sum;
-      bestTL = { x: pt.x, y: pt.y };
-    }
-    if (diff > maxDiff) {
-      maxDiff = diff;
-      bestTR = { x: pt.x, y: pt.y };
-    }
-    if (sum > maxSum) {
-      maxSum = sum;
-      bestBR = { x: pt.x, y: pt.y };
-    }
-    if (yMinusX > maxYMinusX) {
-      maxYMinusX = yMinusX;
-      bestBL = { x: pt.x, y: pt.y };
-    }
-  }
-
-  // 5. 検出された四角形の面積と妥当性チェック
-  // 三角形分割による四角形面積
-  const quadArea = 0.5 * Math.abs(
-    (bestTL.x * bestTR.y - bestTR.x * bestTL.y) +
-    (bestTR.x * bestBR.y - bestBR.x * bestTR.y) +
-    (bestBR.x * bestBL.y - bestBL.x * bestBR.y) +
-    (bestBL.x * bestTL.y - bestTL.x * bestBL.y)
-  );
-
-  const totalArea = w * h;
-  // 面積が全体の30%未満、または98%以上の場合は誤検出の可能性があるためデフォルトへ
-  if (quadArea < totalArea * 0.3 || quadArea > totalArea * 0.98) {
-    return defaultCorners;
-  }
-
-  // 元画像解像度にスケーリング
-  const invScale = 1 / scale;
-  return {
-    topLeft: { x: Math.round(bestTL.x * invScale), y: Math.round(bestTL.y * invScale) },
-    topRight: { x: Math.round(bestTR.x * invScale), y: Math.round(bestTR.y * invScale) },
-    bottomRight: { x: Math.round(bestBR.x * invScale), y: Math.round(bestBR.y * invScale) },
-    bottomLeft: { x: Math.round(bestBL.x * invScale), y: Math.round(bestBL.y * invScale) }
-  };
+  canvas.width = newW;
+  canvas.height = newH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.fillStyle = "#0b0d12";
+  ctx.fillRect(0, 0, newW, newH);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.translate(newW / 2, newH / 2);
+  ctx.rotate(radians);
+  ctx.drawImage(source, -origW / 2, -origH / 2);
+  return canvas;
 }
 
 /**
@@ -428,26 +410,22 @@ export function estimateDocumentCorners(source: HTMLImageElement | HTMLCanvasEle
 export function autoFlattenImage(
   source: HTMLImageElement | HTMLCanvasElement
 ): { canvas: HTMLCanvasElement; appliedTransform: boolean; deskewAngle: number } {
-  const corners = detectDocumentCornersAuto(source);
+  const detected = detectDocumentCornersDetailed(source);
   const origW = source.width;
   const origH = source.height;
-
-  // 四隅が画像端（デフォルトに近いか判定）
-  const isDefault =
-    Math.abs(corners.topLeft.x - origW * 0.04) < 10 &&
-    Math.abs(corners.topLeft.y - origH * 0.04) < 10 &&
-    Math.abs(corners.bottomRight.x - origW * 0.96) < 10 &&
-    Math.abs(corners.bottomRight.y - origH * 0.96) < 10;
 
   let currentCanvas: HTMLCanvasElement;
   let appliedTransform = false;
 
-  if (!isDefault) {
-    // 台形透視変換を実行
-    currentCanvas = applyPerspectiveTransform(source, corners);
+  const canWarp =
+    detected.method !== "fallback" &&
+    detected.confidence >= 0.35 &&
+    quadNeedsWarp(detected.corners, origW, origH, detected.method);
+
+  if (canWarp) {
+    currentCanvas = applyPerspectiveTransform(source, detected.corners);
     appliedTransform = true;
   } else {
-    // 透視変換は不要なためコピー
     currentCanvas = document.createElement("canvas");
     currentCanvas.width = origW;
     currentCanvas.height = origH;
@@ -455,7 +433,6 @@ export function autoFlattenImage(
     if (ctx) ctx.drawImage(source, 0, 0);
   }
 
-  // テキスト行の水平傾きを検出
   const angle = detectImageDeskewAngle(currentCanvas);
 
   return {
@@ -463,5 +440,16 @@ export function autoFlattenImage(
     appliedTransform,
     deskewAngle: angle
   };
+}
+
+export function copySourceToCanvas(
+  source: HTMLImageElement | HTMLCanvasElement
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.drawImage(source, 0, 0);
+  return canvas;
 }
 

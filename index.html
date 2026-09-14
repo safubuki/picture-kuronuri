@@ -108,7 +108,7 @@
               </svg>
             </div>
             <h3>スマホで撮影、または写真をドロップ</h3>
-            <p>チャット画面などのスクリーンショットや写真を読み込むと、人の顔・アバター・人名・会社名・連絡先を完全ローカルで自動黒塗りします。</p>
+            <p>チャット画面などのスクリーンショットや写真を読み込むと、斜め撮影の正対化まで含めて端末内で自動黒塗りします。</p>
             <div class="action-buttons-group">
               <button id="btnTakePhoto" class="btn btn-camera">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -225,12 +225,12 @@
             <span class="panel-badge">歪み・傾き</span>
           </div>
           <div style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-            斜め撮影の台形歪み・傾きに加え、画面のカメラ撮影で起きるジャギー・モアレ・小さい文字は、解析時に自動で前処理します（AI不使用）。
+            撮影・読み込み直後に、台形の正対化・傾き補正・モアレ除去まで自動で行います（AI不使用）。うまく決まらないときだけ下のボタンでやり直してください。
           </div>
 
           <!-- One-touch Auto Flatten Pipeline -->
           <button id="btnAutoFlatten" class="btn btn-primary btn-block" style="margin-bottom: 0.65rem; background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%); font-weight: 700; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);" title="四隅の台形歪みと傾きを全自動検出し、正面フラット化して最適解析します">
-            ⚡ 自動フラット化＆解析
+            ⚡ もう一度正対化して解析
           </button>
 
           <div style="display: flex; gap: 0.5rem; margin-bottom: 0.6rem;">

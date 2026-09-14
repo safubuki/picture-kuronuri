@@ -8,10 +8,10 @@ import {
   detectImageDeskewAngle,
   applyPerspectiveTransform,
   detectDocumentCornersAuto,
-  autoFlattenImage,
   type QuadCorners,
   type Point2D
 } from "./engine/autoDeskew";
+import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine/capturePipeline";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -167,19 +167,57 @@ function handleImageFile(file: File): void {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target?.result as string;
-    if (!dataUrl) return;
+  void (async () => {
+    try {
+      const img = await loadImageFromFile(file);
+      await ingestCapturedImage(img, { autoCorrect: true });
+    } catch (err) {
+      console.error(err);
+      showToast("画像の読み込みに失敗しました");
+    }
+  })();
+}
 
-    const img = new Image();
-    img.onload = () => {
-      appState.setSourceImage(img);
-      startAnalysis();
-    };
-    img.src = dataUrl;
-  };
-  reader.readAsDataURL(file);
+async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("canvas");
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("blob"));
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = reject;
+        img.src = url;
+      }, "image/png");
+    });
+  } catch {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
 }
 
 // 現在の画像の補助メタデータ（サンプル画像等）
@@ -194,15 +232,62 @@ function handleImageDataUrl(
   preloadedOcr?: import("./engine/ocr").OcrResult,
   preloadedAvatars?: { x: number; y: number; width: number; height: number }[]
 ): void {
-  currentPreloadedOcr = preloadedOcr;
-  currentPreloadedAvatars = preloadedAvatars;
-
   const img = new Image();
   img.onload = () => {
-    appState.setSourceImage(img);
-    startAnalysis();
+    void ingestCapturedImage(img, {
+      autoCorrect: !preloadedOcr,
+      preloadedOcr,
+      preloadedAvatars
+    });
   };
   img.src = dataUrl;
+}
+
+let lastCorrection: CaptureCorrectionResult | null = null;
+
+async function ingestCapturedImage(
+  img: HTMLImageElement,
+  opts: {
+    autoCorrect: boolean;
+    preloadedOcr?: import("./engine/ocr").OcrResult;
+    preloadedAvatars?: { x: number; y: number; width: number; height: number }[];
+  }
+): Promise<void> {
+  currentPreloadedOcr = opts.preloadedOcr;
+  currentPreloadedAvatars = opts.preloadedAvatars;
+  lastCorrection = null;
+
+  if (!opts.autoCorrect) {
+    appState.setSourceImage(img);
+    await startAnalysis();
+    return;
+  }
+
+  appState.setAnalyzing(true, "撮影画像を正対化しています...", 0.03);
+  try {
+    const corrected = await autoCorrectCapturedPhoto(img, (status, progress) => {
+      appState.setAnalyzing(true, status, progress);
+    });
+    lastCorrection = corrected;
+    currentPreloadedOcr = undefined;
+    currentPreloadedAvatars = undefined;
+    appState.setSourceImage(corrected.image);
+    if (!corrected.skipped) {
+      const bits = [
+        corrected.appliedPerspective ? "台形正対化" : "",
+        corrected.deskewAngle !== 0 ? `傾き${corrected.deskewAngle > 0 ? "+" : ""}${corrected.deskewAngle.toFixed(1)}°` : "",
+        corrected.enhanced ? "画質整え" : ""
+      ].filter(Boolean);
+      if (bits.length > 0) {
+        showToast(`自動補正: ${bits.join(" ＋ ")}`);
+      }
+    }
+  } catch (err) {
+    console.warn("Auto-correct failed, analyzing original:", err);
+    appState.setSourceImage(img);
+  }
+
+  await startAnalysis();
 }
 
 // 現在の画像から検出された行の傾き角度（度）
@@ -240,8 +325,9 @@ async function startAnalysis(): Promise<void> {
 
     appState.setBoxes(result.boxes);
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
+    const corrNotice = lastCorrection && !lastCorrection.skipped ? " / 正対化済み" : "";
     const photoNotice = result.ocrResult.analysis?.isLikelyScreenPhoto ? " / 画面撮影向け前処理" : "";
-    showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${photoNotice}`);
+    showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${corrNotice}${photoNotice}`);
   } catch (err) {
     console.error("Analysis failed:", err);
     showToast("画像解析中にエラーが発生しました");
@@ -559,51 +645,37 @@ function initEvents(): void {
     }
   });
 
-  // ワンタップ自動フラット化パイプライン（AI不使用・四隅台形歪み＆水平傾き補正）
+  // ワンタップ自動フラット化パイプライン（撮影直後と同じ一気通貫補正）
   btnAutoFlatten.addEventListener("click", async () => {
     const state = appState.getState();
     if (!state.sourceImage) return;
 
-    showToast("四隅の台形歪み・行の傾きを数学的解析中（AI不使用）...");
-    await new Promise(r => setTimeout(r, 80));
-
-    const result = autoFlattenImage(state.sourceImage);
-
-    // 水平微細傾きがあればさらに回転補正
-    let finalCanvas = result.canvas;
-    let angleApplied = 0;
-    if (Math.abs(result.deskewAngle) >= 0.4) {
-      const rot = await rotateAndDeskewImage(finalCanvas, -result.deskewAngle);
-      finalCanvas = document.createElement("canvas");
-      finalCanvas.width = rot.width;
-      finalCanvas.height = rot.height;
-      const fCtx = finalCanvas.getContext("2d");
-      if (fCtx) fCtx.drawImage(rot, 0, 0);
-      angleApplied = result.deskewAngle;
+    appState.setAnalyzing(true, "正対化・台形補正・画質整えを実行中...", 0.04);
+    try {
+      const corrected = await autoCorrectCapturedPhoto(state.sourceImage, (status, progress) => {
+        appState.setAnalyzing(true, status, progress);
+      });
+      if (corrected.skipped) {
+        appState.setAnalyzing(false);
+        showToast("画像の歪み・傾きはすでに最適です（補正不要）");
+        return;
+      }
+      lastCorrection = corrected;
+      currentPreloadedOcr = undefined;
+      currentPreloadedAvatars = undefined;
+      appState.setSourceImage(corrected.image);
+      const desc = [
+        corrected.appliedPerspective ? "台形正対化" : "",
+        corrected.deskewAngle !== 0 ? `水平傾き(${corrected.deskewAngle > 0 ? "+" : ""}${corrected.deskewAngle.toFixed(1)}°)` : "",
+        corrected.enhanced ? "画質整え" : ""
+      ].filter(Boolean).join(" ＋ ");
+      showToast(`自動フラット化完了（${desc}）！真正面の状態で黒塗りを再適用します`);
+      await startAnalysis();
+    } catch (err) {
+      console.error(err);
+      appState.setAnalyzing(false);
+      showToast("自動補正中にエラーが発生しました");
     }
-
-    if (!result.appliedTransform && angleApplied === 0) {
-      showToast("画像の歪み・傾きはすでに最適です（補正不要）");
-      return;
-    }
-
-    const flatImg = await new Promise<HTMLImageElement>((res, rej) => {
-      const img = new Image();
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = finalCanvas.toDataURL("image/png");
-    });
-
-    currentPreloadedOcr = undefined;
-    currentPreloadedAvatars = undefined;
-    appState.setSourceImage(flatImg);
-    startAnalysis();
-
-    const desc = [
-      result.appliedTransform ? "台形透視変換" : "",
-      angleApplied !== 0 ? `水平傾き(${angleApplied > 0 ? "+" : ""}${angleApplied.toFixed(1)}°)` : ""
-    ].filter(Boolean).join(" ＋ ");
-    showToast(`自動フラット化完了（${desc}）！真正面の状態で高精度黒塗りを再適用しました`);
   });
 
   // 自動傾き補正（AI不使用・数学的行投影プロファイル法）

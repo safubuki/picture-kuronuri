@@ -29,6 +29,8 @@ export async function rotateAndDeskewImage(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas context creation failed");
 
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.translate(newW / 2, newH / 2);
   ctx.rotate(radians);
   ctx.drawImage(source, -origW / 2, -origH / 2);
@@ -56,11 +58,30 @@ export async function enhanceImageForOcr(
   return loadImageFromDataUrl(canvas.toDataURL("image/png"));
 }
 
-function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+export function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = (err) => reject(err);
     img.src = dataUrl;
+  });
+}
+
+export function loadImageFromCanvas(canvas: HTMLCanvasElement): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("toBlob failed"));
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = reject;
+      img.src = url;
+    }, "image/png");
   });
 }

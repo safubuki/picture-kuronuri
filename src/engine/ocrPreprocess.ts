@@ -293,38 +293,18 @@ function boxSum(
   );
 }
 
-/**
- * 積分画像による局所コントラスト強調（CLAHE に近い高速近似）
- */
-function localContrast(
-  src: Uint8Array,
-  w: number,
-  h: number,
-  win: number,
-  amount: number
-): Uint8Array {
+function boxFilterFloat(src: Float32Array, w: number, h: number, r: number): Float32Array {
   const iiW = w + 1;
   const integral = new Float64Array(iiW * (h + 1));
-  const integralSq = new Float64Array(iiW * (h + 1));
-
-  for (let y = 1; y < h + 1; y++) {
+  for (let y = 1; y <= h; y++) {
     let row = 0;
-    let rowSq = 0;
     const srcRow = (y - 1) * w;
-    for (let x = 1; x < iiW; x++) {
-      const v = src[srcRow + (x - 1)];
-      row += v;
-      rowSq += v * v;
-      const prev = (y - 1) * iiW + x;
-      integral[y * iiW + x] = integral[prev] + row;
-      integralSq[y * iiW + x] = integralSq[prev] + rowSq;
+    for (let x = 1; x <= w; x++) {
+      row += src[srcRow + (x - 1)];
+      integral[y * iiW + x] = integral[(y - 1) * iiW + x] + row;
     }
   }
-
-  const out = new Uint8Array(w * h);
-  const r = Math.max(4, Math.floor(win / 2));
-  const targetStd = 48 * amount;
-
+  const out = new Float32Array(w * h);
   for (let y = 0; y < h; y++) {
     const y0 = y - r < 0 ? 0 : y - r;
     const y1 = y + r >= h ? h - 1 : y + r;
@@ -332,17 +312,148 @@ function localContrast(
       const x0 = x - r < 0 ? 0 : x - r;
       const x1 = x + r >= w ? w - 1 : x + r;
       const n = (x1 - x0 + 1) * (y1 - y0 + 1);
-      const sum = boxSum(integral, iiW, x0, y0, x1, y1);
-      const sumSq = boxSum(integralSq, iiW, x0, y0, x1, y1);
-      const mean = sum / n;
-      const variance = Math.max(0, sumSq / n - mean * mean);
-      const std = Math.sqrt(variance);
-      const gain = clamp(targetStd / (std + 10), 0.55, 2.8);
-      const v = mean + gain * (src[y * w + x] - mean);
-      out[y * w + x] = v < 0 ? 0 : v > 255 ? 255 : v + 0.5;
+      out[y * w + x] = boxSum(integral, iiW, x0, y0, x1, y1) / n;
     }
   }
   return out;
+}
+
+/**
+ * Guided filter (He et al.) — エッジを残したままモアレ／粒状ノイズを落とす
+ */
+function guidedFilter(
+  guide: Uint8Array,
+  src: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+  eps: number
+): Uint8Array {
+  const I = new Float32Array(w * h);
+  const P = new Float32Array(w * h);
+  const II = new Float32Array(w * h);
+  const IP = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const g = guide[i];
+    const p = src[i];
+    I[i] = g;
+    P[i] = p;
+    II[i] = g * g;
+    IP[i] = g * p;
+  }
+  const meanI = boxFilterFloat(I, w, h, radius);
+  const meanP = boxFilterFloat(P, w, h, radius);
+  const meanII = boxFilterFloat(II, w, h, radius);
+  const meanIP = boxFilterFloat(IP, w, h, radius);
+  const a = new Float32Array(w * h);
+  const b = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const varI = Math.max(0, meanII[i] - meanI[i] * meanI[i]);
+    const cov = meanIP[i] - meanI[i] * meanP[i];
+    a[i] = cov / (varI + eps);
+    b[i] = meanP[i] - a[i] * meanI[i];
+  }
+  const meanA = boxFilterFloat(a, w, h, radius);
+  const meanB = boxFilterFloat(b, w, h, radius);
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const v = meanA[i] * I[i] + meanB[i];
+    out[i] = v < 0 ? 0 : v > 255 ? 255 : v + 0.5;
+  }
+  return out;
+}
+
+function claheGray(
+  src: Uint8Array,
+  w: number,
+  h: number,
+  tilesX: number = 8,
+  tilesY: number = 8,
+  clipLimit: number = 2.4
+): Uint8Array {
+  const tw = Math.max(8, Math.ceil(w / tilesX));
+  const th = Math.max(8, Math.ceil(h / tilesY));
+  const nx = Math.ceil(w / tw);
+  const ny = Math.ceil(h / th);
+  const luts: Uint8Array[] = [];
+
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const x0 = tx * tw;
+      const y0 = ty * th;
+      const x1 = Math.min(w, x0 + tw);
+      const y1 = Math.min(h, y0 + th);
+      const hist = new Float32Array(256);
+      let count = 0;
+      for (let y = y0; y < y1; y++) {
+        const row = y * w;
+        for (let x = x0; x < x1; x++) {
+          hist[src[row + x]]++;
+          count++;
+        }
+      }
+      const clip = Math.max(1, (clipLimit * count) / 256);
+      let excess = 0;
+      for (let i = 0; i < 256; i++) {
+        if (hist[i] > clip) {
+          excess += hist[i] - clip;
+          hist[i] = clip;
+        }
+      }
+      const redist = excess / 256;
+      for (let i = 0; i < 256; i++) hist[i] += redist;
+      const lut = new Uint8Array(256);
+      let cdf = 0;
+      const scale = 255 / Math.max(1, count);
+      for (let i = 0; i < 256; i++) {
+        cdf += hist[i];
+        lut[i] = clamp(cdf * scale, 0, 255);
+      }
+      luts.push(lut);
+    }
+  }
+
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const ty = Math.min(ny - 1, y / th);
+    const ty0 = Math.floor(ty);
+    const ty1 = Math.min(ny - 1, ty0 + 1);
+    const fty = ty - ty0;
+    for (let x = 0; x < w; x++) {
+      const tx = Math.min(nx - 1, x / tw);
+      const tx0 = Math.floor(tx);
+      const tx1 = Math.min(nx - 1, tx0 + 1);
+      const ftx = tx - tx0;
+      const v = src[y * w + x];
+      const v00 = luts[ty0 * nx + tx0][v];
+      const v10 = luts[ty0 * nx + tx1][v];
+      const v01 = luts[ty1 * nx + tx0][v];
+      const v11 = luts[ty1 * nx + tx1][v];
+      const top = v00 * (1 - ftx) + v10 * ftx;
+      const bot = v01 * (1 - ftx) + v11 * ftx;
+      out[y * w + x] = top * (1 - fty) + bot * fty + 0.5;
+    }
+  }
+  return out;
+}
+
+function reduceColorFringe(data: Uint8ClampedArray, w: number, h: number): void {
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      const yL = luminance(data[i], data[i + 1], data[i + 2]);
+      const chroma = Math.abs(data[i] - yL) + Math.abs(data[i + 2] - yL);
+      if (chroma < 14) continue;
+      const up = luminance(data[i - w * 4], data[i - w * 4 + 1], data[i - w * 4 + 2]);
+      const dn = luminance(data[i + w * 4], data[i + w * 4 + 1], data[i + w * 4 + 2]);
+      const hf = Math.abs(yL - (up + dn) * 0.5);
+      if (hf < 6) continue;
+      const t = clamp((chroma - 10) / 40, 0, 0.55);
+      data[i] = data[i] * (1 - t) + yL * t;
+      data[i + 1] = data[i + 1] * (1 - t) + yL * t;
+      data[i + 2] = data[i + 2] * (1 - t) + yL * t;
+    }
+  }
 }
 
 function unsharp(
@@ -476,27 +587,21 @@ export function preprocessForOcr(
 
   if (analysis.isLikelyScreenPhoto || smallText) {
     gray = median3x3(gray, w, h);
-    const sigma = analysis.isLikelyScreenPhoto ? 0.7 : 0.45;
-    gray = gaussianBlurSeparable(gray, w, h, sigma);
+    const radius = analysis.isLikelyScreenPhoto ? 4 : 3;
+    gray = guidedFilter(gray, gray, w, h, radius, 80);
   }
 
-  const win = clamp(
-    Math.round((analysis.estimatedLineHeight || 16) * scale * 1.6),
-    18,
-    56
-  );
-  const amount = analysis.isLikelyScreenPhoto || analysis.contrast < 12 ? 1.15 : 0.9;
-  gray = localContrast(gray, w, h, win, amount);
+  gray = claheGray(gray, w, h, 8, 8, analysis.isLikelyScreenPhoto ? 2.6 : 2.2);
 
   if (analysis.isDarkBackground) {
     gray = invertGray(gray);
   }
 
-  const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.9);
-  const sharpAmt = analysis.isLikelyScreenPhoto ? 1.05 : 0.7;
+  const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.8);
+  const sharpAmt = analysis.isLikelyScreenPhoto ? 0.7 : 0.55;
   gray = unsharp(gray, blurForSharp, sharpAmt);
 
-  if (analysis.isLikelyScreenPhoto || smallText) {
+  if (smallText && analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 12) {
     gray = morphCloseDarkText(gray, w, h);
   }
 
@@ -525,6 +630,8 @@ export function enhanceColorImage(
 
   const img = ctx.getImageData(0, 0, w, h);
   const data = img.data;
+  reduceColorFringe(data, w, h);
+
   let gray: Uint8Array = new Uint8Array(w * h);
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
     gray[p] = luminance(data[i], data[i + 1], data[i + 2]) + 0.5;
@@ -532,15 +639,15 @@ export function enhanceColorImage(
 
   if (analysis.isLikelyScreenPhoto) {
     gray = median3x3(gray, w, h);
+    gray = guidedFilter(gray, gray, w, h, 4, 90);
   }
 
-  const win = clamp(Math.round((analysis.estimatedLineHeight || 20) * 1.5), 16, 48);
-  const enhanced = localContrast(gray, w, h, win, 1.0);
-  const blur = gaussianBlurSeparable(enhanced, w, h, 0.8);
-  const sharp = unsharp(enhanced, blur, 0.85);
+  const equalized = claheGray(gray, w, h, 8, 8, 2.3);
+  const blur = gaussianBlurSeparable(equalized, w, h, 0.75);
+  const sharp = unsharp(equalized, blur, 0.55);
 
   for (let i = 0, p = 0; i < sharp.length; i++, p += 4) {
-    const srcY = gray[i] || 1;
+    const srcY = Math.max(1, gray[i]);
     const ratio = sharp[i] / srcY;
     data[p] = clamp(data[p] * ratio, 0, 255);
     data[p + 1] = clamp(data[p + 1] * ratio, 0, 255);
