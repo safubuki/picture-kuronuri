@@ -33,9 +33,9 @@ function fitWindowToInk(
 ): InkRect | null {
   if (rect.width < 4 || rect.height < 4) return null;
 
-  // 探索範囲を元の矩形近傍（数px）に厳格制限（隣の文字やアイコンを巻き込まない）
-  const padX = Math.min(8, Math.max(3, Math.round(rect.width * 0.12)));
-  const padY = Math.min(6, Math.max(3, Math.round(rect.height * 0.15)));
+  // 探索範囲：左右は隣の文字を絶対に巻き込まないよう1pxに厳格制限
+  const padX = 1;
+  const padY = Math.min(4, Math.max(2, Math.round(rect.height * 0.12)));
   const x0 = clamp(Math.floor(rect.x - padX), 0, w - 1);
   const y0 = clamp(Math.floor(rect.y - padY), 0, h - 1);
   const x1 = clamp(Math.ceil(rect.x + rect.width + padX), 0, w - 1);

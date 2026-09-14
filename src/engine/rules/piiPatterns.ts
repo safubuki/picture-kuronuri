@@ -109,14 +109,40 @@ export function detectPiiInText(text: string): PiiMatch[] {
     }
   }
 
-  // 4. 住所パターン (都道府県から始まり、市区町村・番地で終わる。OCR空白混入を許容)
-  // 例: "東京都 千代田区 丸の内 1-2-3"
-  const addressRegex = new RegExp(`(?:${PREF_PATTERN})[^\n\r0-9０-９、。！？]{1,25}[0-9０-９ー丁目番地号\\-\\s]+`, "gu");
-  while ((match = addressRegex.exec(text)) !== null) {
+  // 4. 住所パターン
+  // 4a. 都道府県から始まり、市区町村・番地で終わる（例: "東京都港区六本木6-10-1"）
+  const prefAddressRegex = new RegExp(`(?:${PREF_PATTERN})[^\n\r0-9０-９、。！？]{1,25}[0-9０-９ー丁目番地号\\-\\s]+`, "gu");
+  while ((match = prefAddressRegex.exec(text)) !== null) {
     pushUnique(results, {
       matchedText: match[0].trim(),
       startIndex: match.index,
       endIndex: match.index + match[0].trim().length,
+      category: "address",
+      label: "住所"
+    });
+  }
+
+  // 4b. 都道府県省略の市区町村・番地表記（例: 「港区六本木6-10-1」「新宿区西新宿2-8-1」）
+  const cityAddressRegex = /([^\n\r0-9０-９、。！？\s]{1,12}(?:[市区町村郡])[^\n\r0-9０-９、。！？\s]{1,15}[0-9０-９ー丁目番地号\-\s]+)/gu;
+  while ((match = cityAddressRegex.exec(text)) !== null) {
+    const raw = match[0].trim();
+    pushUnique(results, {
+      matchedText: raw,
+      startIndex: match.index,
+      endIndex: match.index + raw.length,
+      category: "address",
+      label: "住所"
+    });
+  }
+
+  // 4c. 市区町村すら省略された地名＋番地記法（例: 「六本木6-10-1」「丸の内1-1-1」）
+  const blockAddressRegex = /([\p{Script=Han}]{2,6}[0-9０-９]+(?:[-ー−–‐][0-9０-９]+){1,3})/gu;
+  while ((match = blockAddressRegex.exec(text)) !== null) {
+    const raw = match[0].trim();
+    pushUnique(results, {
+      matchedText: raw,
+      startIndex: match.index,
+      endIndex: match.index + raw.length,
       category: "address",
       label: "住所"
     });

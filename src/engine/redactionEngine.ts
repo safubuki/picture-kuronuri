@@ -118,6 +118,7 @@ export async function analyzeImageForRedaction(
     // A. チャット送信者ヘッダー判定（短くて行頭にあり、人名らしい）
     if (options.detectPersons && isLikelyChatSender(lineText)) {
       const rect = calculateBBoxForRange(line, 0, lineText.length);
+      console.log("[redactionEngine:header]", { lineText, rect });
       if (rect) {
         boxes.push({
           id: `person-header-${line.bbox.x0}-${line.bbox.y0}`,
@@ -136,6 +137,12 @@ export async function analyzeImageForRedaction(
       const personMatches = detectPersonsInText(lineText);
       for (const p of personMatches) {
         const rect = calculateBBoxForRange(line, p.startIndex, p.endIndex);
+        console.log("[redactionEngine:person]", {
+          lineText,
+          matched: p.matchedText,
+          range: [p.startIndex, p.endIndex],
+          rect
+        });
         if (rect) {
           boxes.push({
             id: `person-${line.bbox.x0}-${p.startIndex}`,
@@ -290,48 +297,93 @@ function calculateBBoxForRange(
   const textLen = line.text.length;
   if (startIndex < 0 || endIndex > textLen || startIndex >= endIndex) return null;
 
-  // 正規化後テキストと 1:1 の alignedSymbols を最優先
-  if (line.alignedSymbols && line.alignedSymbols.length > 0) {
-    const aligned = bboxFromSymbols(line.alignedSymbols, startIndex, endIndex);
-    if (aligned) return aligned;
-  }
+  // 1. ターゲットテキストの直接シンボル照合（文字一致でピンポイント特定）
+  const targetText = line.text.slice(startIndex, endIndex).replace(/[\s\t\u3000]/g, "");
+  const symbolsToSearch = (line.alignedSymbols && line.alignedSymbols.length > 0) ? line.alignedSymbols : line.symbols;
 
-  if (line.symbols && line.symbols.length > 0) {
-    const fromSym = bboxFromSymbols(line.symbols, startIndex, endIndex);
-    if (fromSym) return fromSym;
-  }
+  let resultBox: { x: number; y: number; width: number; height: number } | null = null;
 
-  // 単語列から比率推定
-  if (line.words && line.words.length > 0) {
-    const joined = line.words.map((w) => w.text).join("");
-    if (joined.length > 0) {
-      const ratioStart = startIndex / textLen;
-      const ratioEnd = endIndex / textLen;
-      const from = Math.floor(ratioStart * line.words.length);
-      const to = Math.min(line.words.length - 1, Math.max(from, Math.ceil(ratioEnd * line.words.length) - 1));
-      const fromWord = bboxFromSymbols(
-        line.words.map((w) => ({ bbox: w.bbox })),
-        from,
-        to + 1
-      );
-      if (fromWord) return fromWord;
+  if (targetText && symbolsToSearch && symbolsToSearch.length > 0) {
+    const symTexts = symbolsToSearch.map((s) => (s.text || "").replace(/[\s\t\u3000]/g, ""));
+    const fullSymStr = symTexts.join("");
+    let matchIdx = fullSymStr.indexOf(targetText);
+
+    // 完全一致しない場合、末尾側（例:「田様」）や先頭側で部分一致を試行
+    if (matchIdx === -1 && targetText.length >= 2) {
+      const sub = targetText.slice(1);
+      const subIdx = fullSymStr.indexOf(sub);
+      if (subIdx > 0) {
+        matchIdx = subIdx - 1;
+      }
+    }
+
+    if (matchIdx !== -1) {
+      const matchedSlice = symbolsToSearch.slice(matchIdx, matchIdx + targetText.length);
+      resultBox = bboxFromSymbols(matchedSlice, 0, matchedSlice.length);
     }
   }
 
-  const lineBox = line.bbox;
-  const totalW = lineBox.x1 - lineBox.x0;
-  const totalH = lineBox.y1 - lineBox.y0;
-  const startRatio = startIndex / textLen;
-  const endRatio = endIndex / textLen;
-  const x = Math.round(lineBox.x0 + totalW * startRatio);
-  const width = Math.max(10, Math.round(totalW * (endRatio - startRatio)));
+  // 2. シンボル照合ができなかった場合のフォールバック
+  if (!resultBox) {
+    if (line.alignedSymbols && line.alignedSymbols.length > 0) {
+      resultBox = bboxFromSymbols(line.alignedSymbols, startIndex, endIndex);
+    }
+  }
 
-  return {
-    x,
-    y: lineBox.y0,
-    width,
-    height: totalH
-  };
+  if (!resultBox && line.symbols && line.symbols.length > 0) {
+    resultBox = bboxFromSymbols(line.symbols, startIndex, endIndex);
+  }
+
+  // 3. 単語列からの比率推定フォールバック
+  if (!resultBox && line.words && line.words.length > 0) {
+    const ratioStart = startIndex / textLen;
+    const ratioEnd = endIndex / textLen;
+    const from = Math.floor(ratioStart * line.words.length);
+    const to = Math.min(line.words.length - 1, Math.max(from, Math.ceil(ratioEnd * line.words.length) - 1));
+    resultBox = bboxFromSymbols(
+      line.words.map((w) => ({ bbox: w.bbox })),
+      from,
+      to + 1
+    );
+  }
+
+  if (!resultBox) {
+    const lineBox = line.bbox;
+    const totalW = lineBox.x1 - lineBox.x0;
+    const totalH = lineBox.y1 - lineBox.y0;
+    const startRatio = startIndex / textLen;
+    const endRatio = endIndex / textLen;
+    const x = Math.round(lineBox.x0 + totalW * startRatio);
+    const width = Math.max(10, Math.round(totalW * (endRatio - startRatio)));
+    resultBox = { x, y: lineBox.y0, width, height: totalH };
+  }
+
+  // ★ 4. 行頭・境界アンカーによるズレの幾何学的完全補正 ★
+  if (resultBox) {
+    // A. 行頭（または空白・記号直後）から始まる語句の場合、行頭の文字のはみ出しを防止
+    const prefix = line.text.slice(0, startIndex);
+    if (/^[\s\t\u3000「『"']{0,2}$/.test(prefix)) {
+      // 行の最左端（line.bbox.x0）まで黒塗りを確実に左伸張
+      const origRight = resultBox.x + resultBox.width;
+      resultBox.x = Math.min(resultBox.x, line.bbox.x0);
+      resultBox.width = Math.max(resultBox.width, origRight - resultBox.x);
+    }
+
+    // B. 「（」や「(」の直後から始まる語句（例:「プロジェクト連絡（山田・鈴木）」）
+    const parenMatch = prefix.match(/[（(][\s\t]*$/);
+    if (parenMatch) {
+      // 括弧の直後から始まるため、もし黒塗りが右にズレていたら左側（括弧のすぐ右）までカバー
+      const parenRatio = (prefix.length - parenMatch[0].length + 1) / textLen;
+      const expectedLeft = Math.round(line.bbox.x0 + (line.bbox.x1 - line.bbox.x0) * parenRatio);
+      if (resultBox.x > expectedLeft + 6) {
+        const origRight = resultBox.x + resultBox.width;
+        resultBox.x = expectedLeft;
+        resultBox.width = Math.max(resultBox.width, origRight - resultBox.x);
+      }
+    }
+  }
+
+  return resultBox;
 }
 
 /**
@@ -467,8 +519,17 @@ function mergeAdjacentBoxes(boxes: RedactBox[]): RedactBox[] {
         if (Math.abs(a.height - b.height) / Math.max(a.height, b.height, 1) > 0.5) continue;
 
         const gap = a.x <= b.x ? b.x - (a.x + a.width) : a.x - (b.x + b.width);
-        if (gap > Math.max(a.height, b.height) * 0.55) continue;
+        if (gap > 2) continue; // 重なりまたは完全接触（2px以内）のみ結合を許可
         if (gap < -Math.max(a.height, b.height) * 0.3) continue;
+
+        // 人名同士でどちらかが敬称付き（「山田さん」等）なら別人なので結合しない
+        if (acc.type === "person") {
+          const aText = acc.text || "";
+          const bText = other.text || "";
+          if (/(?:様|さま|さん|サン|君|くん|ちゃん|氏|殿)$/.test(aText) || /(?:様|さま|さん|サン|君|くん|ちゃん|氏|殿)$/.test(bText)) {
+            continue;
+          }
+        }
 
         acc = {
           ...acc,

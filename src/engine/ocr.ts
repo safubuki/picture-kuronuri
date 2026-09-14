@@ -187,6 +187,35 @@ function buildAlignedLine(
   }
 
   const fallbackText = text || rawText.trim();
+
+  // text と alignedSymbols の長さを 1:1 に厳格同期（ズレを完全排除）
+  if (fallbackText.length > 0 && aligned.length !== fallbackText.length) {
+    const synced: OcrChar[] = [];
+    const totalW = Math.max(1, bbox.x1 - bbox.x0);
+    const charW = totalW / fallbackText.length;
+
+    for (let idx = 0; idx < fallbackText.length; idx++) {
+      // 既存の aligned に対応するシンボルがあればそれを利用
+      if (idx < aligned.length && aligned[idx].bbox && aligned[idx].bbox.x1 > aligned[idx].bbox.x0) {
+        synced.push({
+          ...aligned[idx],
+          text: fallbackText[idx]
+        });
+      } else {
+        // なければ行幅からの等分割補間
+        const x0 = Math.round(bbox.x0 + idx * charW);
+        const x1 = Math.round(bbox.x0 + (idx + 1) * charW);
+        synced.push({
+          text: fallbackText[idx],
+          bbox: { x0, y0: bbox.y0, x1, y1: bbox.y1 },
+          confidence
+        });
+      }
+    }
+    aligned.length = 0;
+    aligned.push(...synced);
+  }
+
   return {
     text: fallbackText,
     rawText,

@@ -69,6 +69,12 @@ export function detectPersonsInText(text: string): PersonMatch[] {
   while ((match = honorificRegex.exec(compact)) !== null) {
     const namePart = match[1];
     const matchedFull = match[0];
+
+    // 定型挨拶・一般名詞の除外（「お疲れ様」「ご苦労様」「皆様」「お客様」「ご対応様」等は人名ではない）
+    if (/^(?:お疲れ|おつかれ|ご苦労|ごくろう|お世話|おせわ|皆|みな|客|神|仏|王)$/.test(namePart)) {
+      continue;
+    }
+
     const cStart = match.index;
     const cEnd = cStart + matchedFull.length;
     const { start, end } = toOrigRange(cStart, cEnd);
@@ -104,11 +110,38 @@ export function detectPersonsInText(text: string): PersonMatch[] {
     }
   }
 
+  // 1c. 名字＋名乗り・助動詞表現 (例: 「鈴木です」「田中でした」「佐藤より」「高橋から」)
+  const introRegex = /([\p{Script=Han}]{1,4})(?:です|ます|でした|より|から)(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])/gu;
+  while ((match = introRegex.exec(compact)) !== null) {
+    const candidate = match[1];
+    if (matchSurname(candidate)) {
+      const cStart = match.index;
+      const cEnd = cStart + candidate.length;
+      const { start, end } = toOrigRange(cStart, cEnd);
+      const isCovered = results.some(r => start >= r.startIndex && end <= r.endIndex);
+      if (!isCovered) {
+        results.push({
+          matchedText: text.slice(start, end),
+          nameOnly: candidate,
+          startIndex: start,
+          endIndex: end,
+          reason: "surname_match"
+        });
+      }
+    }
+  }
+
   // 2. フルネームパターン (例: "山田 太郎", "山 田 太 郎", "鈴木 一郎", "山田太郎")
   const fullNameRegex = /([\p{Script=Han}\p{Script=Katakana}]{1,4})([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
   while ((match = fullNameRegex.exec(compact)) !== null) {
     const candidateSurname = match[1];
     const candidateGiven = match[2];
+
+    // 敬称は1ですでに処理済みなので除外
+    if (/^(?:さん|サン|様|サマ|さま|君|くん|ちゃん|殿|どの|氏)$/.test(candidateGiven)) {
+      continue;
+    }
+
     const matchedFull = match[0];
     const cStart = match.index;
     const cEnd = cStart + matchedFull.length;

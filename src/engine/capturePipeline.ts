@@ -90,6 +90,13 @@ export async function autoCorrectCapturedPhoto(
     detected.confidence >= 0.42 &&
     quadNeedsWarp(detected.corners, source.width, source.height, detected.method);
 
+  console.log("[autoCorrectCapturedPhoto] Detection result:", JSON.stringify({
+    method: detected.method,
+    confidence: detected.confidence,
+    canWarp,
+    corners: detected.corners
+  }));
+
   if (canWarp) {
     onProgress?.("台形補正で画面を正対化しています...", 0.1);
     await yieldFrame();
@@ -98,6 +105,11 @@ export async function autoCorrectCapturedPhoto(
     const afterSkew = detectImageDeskewAngle(warped);
     const warpedWorse =
       Math.abs(afterSkew) > 6 && Math.abs(afterSkew) > Math.abs(beforeSkew) + 2.5;
+    console.log("[autoCorrectCapturedPhoto] Perspective warp:", JSON.stringify({
+      beforeSkew,
+      afterSkew,
+      warpedWorse
+    }));
     if (!warpedWorse) {
       work = warped;
       appliedPerspective = true;
@@ -109,6 +121,7 @@ export async function autoCorrectCapturedPhoto(
   const deskewed = applyDeskewPass(work);
   work = deskewed.canvas;
   const deskewAngle = deskewed.angle;
+  console.log("[autoCorrectCapturedPhoto] Deskew pass:", JSON.stringify({ deskewAngle }));
 
   const analysis = analyzeOcrSource(work);
   let enhanced = false;

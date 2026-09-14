@@ -334,9 +334,20 @@ async function startAnalysis(): Promise<void> {
   try {
     // 画素を正対化済みなら、箱だけ傾けると位置がずれるので追従しない
     currentDetectedDeskewAngle = 0;
-    const alreadyFrontal = !!(lastCorrection && !lastCorrection.skipped);
+    const alreadyFrontal = !!(lastCorrection && (lastCorrection.appliedPerspective || Math.abs(lastCorrection.deskewAngle) >= 0.5));
+    console.log("[startAnalysis] Frontal check:", JSON.stringify({
+      alreadyFrontal,
+      lastCorrection: lastCorrection ? {
+        appliedPerspective: lastCorrection.appliedPerspective,
+        deskewAngle: lastCorrection.deskewAngle,
+        enhanced: lastCorrection.enhanced,
+        skipped: lastCorrection.skipped
+      } : null,
+      toggleFollowSlope: toggleFollowSlope.checked
+    }));
     if (toggleFollowSlope.checked && !alreadyFrontal) {
       const detected = detectImageDeskewAngle(state.sourceImage);
+      console.log("[startAnalysis] Detected deskew angle for bounding boxes:", detected);
       if (Math.abs(detected) >= 0.8) {
         currentDetectedDeskewAngle = detected;
       }

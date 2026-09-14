@@ -144,8 +144,8 @@ function detectChatAvatarsStrict(
 
   const startY = Math.round(sh * 0.11);
   const endY = Math.round(sh * 0.90);
-  // 写真中央寄りのチャットや余白のある写真に対応できるよう探索範囲を拡張
-  const xs = [0.05, 0.08, 0.11, 0.14, 0.17, 0.20, 0.23, 0.27].map((r) => Math.round(sw * r));
+  // 写真左端のチャットアイコン用カラム（吹き出し内部まで誤侵入しないよう0.15までに限定）
+  const xs = [0.04, 0.06, 0.08, 0.10, 0.12, 0.14].map((r) => Math.round(sw * r));
 
   interface Candidate {
     origX: number;
@@ -161,7 +161,7 @@ function detectChatAvatarsStrict(
       if (fixedX + avatarSize >= sw) continue;
       for (let y = startY; y < endY - avatarSize; y += stepY) {
         const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
-        if (score >= 65) {
+        if (score >= 50) {
           candidates.push({
             origX: Math.round(fixedX / scale),
             origY: Math.round(y / scale),
@@ -215,7 +215,6 @@ function evaluateStrictAvatar(
   if (x + size >= sw || y + size >= sh) return 0;
 
   let sum = 0;
-  let sumSq = 0;
   let count = 0;
   let satSum = 0;
   const half = Math.floor(size / 2);
@@ -232,7 +231,6 @@ function evaluateStrictAvatar(
       if (px < 0 || px >= sw || py < 0 || py >= sh) continue;
       const val = gray[py * sw + px];
       sum += val;
-      sumSq += val * val;
       count++;
       const i = (py * sw + px) * 4;
       const r = rgba[i];
@@ -246,37 +244,40 @@ function evaluateStrictAvatar(
 
   if (count === 0) return 0;
   const mean = sum / count;
-  const variance = sumSq / count - mean * mean;
   const sat = satSum / count;
 
-  // 真っ暗（机の影・黒ベゼル）や真っ白（余白）はアバターではない
-  if (mean < 45 || mean > 235) return 0;
-  if (variance < 180 || variance > 2600) return 0;
-  if (sat < 0.10) return 0;
+  // 真っ暗（机の影・黒ベゼル）や真っ白（背景）はアバターではない
+  if (mean < 35 || mean > 245) return 0;
+  // カラーアイコン（彩度あり）またはグレーアイコン
+  if (sat < 0.08 && (mean < 60 || mean > 210)) return 0;
 
-  let ringEdge = 0;
-  let ringN = 0;
-  const r0 = half * 0.78;
-  const r1 = half * 1.05;
-  for (let a = 0; a < 24; a++) {
-    const rad = (a / 24) * Math.PI * 2;
+  // 8方向の円周エッジ（全方位に背景とのコントラストがあるか）
+  const r0 = half * 0.75;
+  const r1 = half * 1.15;
+  let dirMatches = 0;
+  let totalEdge = 0;
+
+  for (let a = 0; a < 8; a++) {
+    const rad = (a / 8) * Math.PI * 2;
     const xOut = Math.round(cx + Math.cos(rad) * r1);
     const yOut = Math.round(cy + Math.sin(rad) * r1);
     const xIn = Math.round(cx + Math.cos(rad) * r0);
     const yIn = Math.round(cy + Math.sin(rad) * r0);
     if (xOut < 0 || yOut < 0 || xOut >= sw || yOut >= sh) continue;
     if (xIn < 0 || yIn < 0 || xIn >= sw || yIn >= sh) continue;
-    ringEdge += Math.abs(gray[yOut * sw + xOut] - gray[yIn * sw + xIn]);
-    ringN++;
+    const diff = Math.abs(gray[yOut * sw + xOut] - gray[yIn * sw + xIn]);
+    totalEdge += diff;
+    if (diff >= 14) dirMatches++;
   }
-  if (ringN === 0) return 0;
-  const ring = ringEdge / ringN;
-  if (ring < 22) return 0;
+
+  // 8方向中少なくとも5方向でエッジが存在すること（単なる水平線やテキスト行なら2〜3方向しかない）
+  if (dirMatches < 5) return 0;
+  const avgRing = totalEdge / 8;
+  if (avgRing < 16) return 0;
 
   // チャットアイコンの右側（吹き出し領域）の存在確認
-  // 右側が完全に真っ黒（机の背景）の場合は誤検出
-  const rightX0 = Math.min(sw - 1, x + size + 4);
-  const rightX1 = Math.min(sw - 1, x + Math.round(size * 2.2));
+  const rightX0 = Math.min(sw - 1, x + size + 2);
+  const rightX1 = Math.min(sw - 1, x + Math.round(size * 2.0));
   if (rightX1 > rightX0) {
     let rightSum = 0;
     let rightCount = 0;
@@ -286,11 +287,11 @@ function evaluateStrictAvatar(
     }
     if (rightCount > 0) {
       const rightMean = rightSum / rightCount;
-      // 右側が極端に暗い（< 40: 机や余白）ならチャット画面ではない
-      if (rightMean < 40) return 0;
+      if (rightMean < 40) return 0; // 右側が机や枠線なら除外
     }
   }
 
+  // 内部が文字の密集（横方向エッジ過多）でないことを確認
   let horizEdge = 0;
   let heN = 0;
   for (let dy = -Math.floor(innerR); dy <= innerR; dy += 2) {
@@ -304,7 +305,7 @@ function evaluateStrictAvatar(
     }
   }
   const textish = heN > 0 ? horizEdge / heN : 0;
-  if (textish > 28) return 0;
+  if (textish > 32) return 0; // 文字の密集領域ならアバターではない
 
-  return Math.min(100, Math.round(ring * 1.5 + sat * 35 + Math.min(25, variance / 50)));
+  return Math.min(98, Math.round(dirMatches * 8 + avgRing * 1.2 + sat * 30));
 }
