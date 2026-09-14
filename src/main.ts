@@ -284,8 +284,8 @@ function handleImageFile(file: File): void {
   void (async () => {
     try {
       const img = await loadImageFromFile(file);
-      // 元の高画質・シャープネスを保ったまま読み込み（歪み補正は「⚡ 自動フラット化」ボタンで実行可能）
-      await ingestCapturedImage(img, { autoCorrect: false });
+      // 撮影・読み込み直後に自動4隅検出 → 虫眼鏡付き手動調整画面を起動
+      await ingestCapturedImage(img, { skipPerspective: false });
     } catch (err) {
       console.error(err);
       showToast("画像の読み込みに失敗しました");
@@ -364,6 +364,43 @@ function refreshRedactedTextPreview(): void {
   }
 }
 
+async function canvasToImage(canvas: HTMLCanvasElement): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Failed to convert canvas to blob"));
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = reject;
+      img.src = url;
+    }, "image/png");
+  });
+}
+
+/**
+ * 台形補正モード起動（AI不使用で四隅を自動検出して初期配置、虫眼鏡付き手動調整対応）
+ */
+function openPerspectiveMode(initialCorners?: QuadCorners): void {
+  const state = appState.getState();
+  if (!state.sourceImage) {
+    showToast("画像を読み込んでから実行してください");
+    return;
+  }
+
+  isPerspectiveMode = true;
+  perspectiveBar.style.display = "flex";
+  // 指定された四隅、または自動検出した四隅をセット
+  perspectiveCorners = initialCorners || detectDocumentCornersAuto(state.sourceImage);
+  activeCornerKey = null;
+  updateCanvasRender();
+}
+
 /**
  * DataURLから画像を読み込んで解析を開始
  */
@@ -375,7 +412,7 @@ function handleImageDataUrl(
   const img = new Image();
   img.onload = () => {
     void ingestCapturedImage(img, {
-      autoCorrect: !preloadedOcr,
+      skipPerspective: !!preloadedOcr,
       preloadedOcr,
       preloadedAvatars
     });
@@ -385,49 +422,38 @@ function handleImageDataUrl(
 
 let lastCorrection: CaptureCorrectionResult | null = null;
 
+/**
+ * 画像取り込み時の処理パイプライン
+ * 一般的なスキャンアプリの標準UX:
+ * 撮影/画像選択 → 自動4隅判定 → 手動4隅調整(虫眼鏡付き)画面を表示 → 補正実行 → 黒塗り解析
+ */
 async function ingestCapturedImage(
   img: HTMLImageElement,
   opts: {
-    autoCorrect: boolean;
+    skipPerspective?: boolean;
     preloadedOcr?: import("./engine/ocr").OcrResult;
     preloadedAvatars?: { x: number; y: number; width: number; height: number }[];
-  }
+  } = {}
 ): Promise<void> {
   currentPreloadedOcr = opts.preloadedOcr;
   currentPreloadedAvatars = opts.preloadedAvatars;
   lastCorrection = null;
 
-  if (!opts.autoCorrect) {
-    appState.setSourceImage(img);
+  // まず元画像を画面にセットしてキャンバスを表示
+  appState.setSourceImage(img);
+
+  // 正面チャットサンプル等で四隅補正をスキップする場合
+  if (opts.skipPerspective) {
     await startAnalysis();
     return;
   }
 
-  appState.setAnalyzing(true, "撮影画像を正対化しています...", 0.03);
-  try {
-    const corrected = await autoCorrectCapturedPhoto(img, (status, progress) => {
-      appState.setAnalyzing(true, status, progress);
-    });
-    lastCorrection = corrected;
-    currentPreloadedOcr = undefined;
-    currentPreloadedAvatars = undefined;
-    appState.setSourceImage(corrected.image);
-    if (!corrected.skipped) {
-      const bits = [
-        corrected.appliedPerspective ? "台形正対化" : "",
-        corrected.deskewAngle !== 0 ? `傾き${corrected.deskewAngle > 0 ? "+" : ""}${corrected.deskewAngle.toFixed(1)}°` : "",
-        corrected.enhanced ? "画質整え" : ""
-      ].filter(Boolean);
-      if (bits.length > 0) {
-        showToast(`自動補正: ${bits.join(" ＋ ")}`);
-      }
-    }
-  } catch (err) {
-    console.warn("Auto-correct failed, analyzing original:", err);
-    appState.setSourceImage(img);
-  }
+  // ★ 1. AI不使用で画像のエッジから自動で4隅を検出 ★
+  const autoCorners = detectDocumentCornersAuto(img);
 
-  await startAnalysis();
+  // ★ 2. 撮影直後に自動で手動4隅調整モード（拡大鏡付き）を起動！ ★
+  openPerspectiveMode(autoCorners);
+  showToast("📐 画面の4隅にピンを合わせ、「✨ 補正して黒塗り実行」を押してください", 4500);
 }
 
 // 現在の画像から検出された行の傾き角度（度）
@@ -771,12 +797,12 @@ async function capturePhotoFromStream(): Promise<void> {
   ctx.drawImage(cameraVideo, 0, 0, vw, vh);
 
   closeLiveCameraModal();
-  showToast("撮影完了！端末内で安全に画像を解析しています...", 3000);
+  showToast("撮影完了！四隅を確認・微調整してください", 3500);
 
   const dataUrl = capCanvas.toDataURL("image/png");
   const img = new Image();
   img.onload = async () => {
-    await ingestCapturedImage(img, { autoCorrect: false });
+    await ingestCapturedImage(img, { skipPerspective: false });
   };
   img.src = dataUrl;
 }
@@ -960,25 +986,9 @@ function initEvents(): void {
     showToast(`水平補正（${angle > 0 ? "+" : ""}${angle.toFixed(1)}°）を実行し再解析しました`);
   });
 
-  // 台形補正モード起動（AI不使用で四隅を自動検出して初期配置、虫眼鏡付き手動調整対応）
-  const openPerspectiveMode = () => {
-    const state = appState.getState();
-    if (!state.sourceImage) {
-      showToast("画像を読み込んでから実行してください");
-      return;
-    }
-
-    isPerspectiveMode = true;
-    perspectiveBar.style.display = "flex";
-    // 四隅を自動検出してセット
-    perspectiveCorners = detectDocumentCornersAuto(state.sourceImage);
-    updateCanvasRender();
-    showToast("台形補正モード: 四隅のピンをドラッグすると虫眼鏡で微調整できます");
-  };
-
-  btnPerspectiveMode.addEventListener("click", openPerspectiveMode);
+  btnPerspectiveMode.addEventListener("click", () => openPerspectiveMode());
   if (btnToolbarPerspective) {
-    btnToolbarPerspective.addEventListener("click", openPerspectiveMode);
+    btnToolbarPerspective.addEventListener("click", () => openPerspectiveMode());
   }
 
   // 四隅の自動再検出
@@ -991,39 +1001,58 @@ function initEvents(): void {
     showToast("四隅を自動検出しました！必要に応じて微調整してください");
   });
 
-  // 台形補正キャンセル
-  btnCancelPerspective.addEventListener("click", () => {
+  // 台形補正スキップ (補正を行わずにそのまま黒塗り解析を実行)
+  btnCancelPerspective.addEventListener("click", async () => {
     isPerspectiveMode = false;
     perspectiveBar.style.display = "none";
     perspectiveCorners = null;
     activeCornerKey = null;
     updateCanvasRender();
+
+    showToast("補正をスキップし、そのまま黒塗り解析を実行します...");
+    await startAnalysis();
   });
 
-  // 台形補正実行
+  // 台形補正実行（4隅手動調整結果に基づいて台形正対化・各種補正を実施し、黒塗り解析を実行）
   btnApplyPerspective.addEventListener("click", async () => {
     const state = appState.getState();
     if (!state.sourceImage || !perspectiveCorners) return;
 
-    showToast("台形透視変換を実行中...");
-    const warpedCanvas = applyPerspectiveTransform(state.sourceImage, perspectiveCorners);
-    const warpedImg = await new Promise<HTMLImageElement>((res, rej) => {
-      const img = new Image();
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = warpedCanvas.toDataURL("image/png");
-    });
+    appState.setAnalyzing(true, "台形補正・正対化を実行中...", 0.05);
 
-    isPerspectiveMode = false;
-    perspectiveBar.style.display = "none";
-    perspectiveCorners = null;
-    activeCornerKey = null;
+    try {
+      // 1. 調整された4隅ピンによる台形透視変換
+      const warpedCanvas = applyPerspectiveTransform(state.sourceImage, perspectiveCorners);
+      let correctedImg = await canvasToImage(warpedCanvas);
 
-    currentPreloadedOcr = undefined;
-    currentPreloadedAvatars = undefined;
-    appState.setSourceImage(warpedImg);
-    startAnalysis();
-    showToast("台形補正が完了しました！フラットな画面で自動黒塗りを適用しました");
+      // 2. 念のため微細な行傾きを自動検出して水平補正
+      const angle = detectImageDeskewAngle(correctedImg);
+      if (Math.abs(angle) >= 0.5) {
+        correctedImg = await rotateAndDeskewImage(correctedImg, -angle);
+      }
+
+      // 3. モアレ低減・局所コントラスト・文字エッジ強調
+      correctedImg = await enhanceImageForOcr(correctedImg);
+
+      // 4. 台形補正モード終了
+      isPerspectiveMode = false;
+      perspectiveBar.style.display = "none";
+      perspectiveCorners = null;
+      activeCornerKey = null;
+
+      // 5. 正対化された画像をセットし、黒塗り解析（OCR＋個人情報検出）を実行！
+      currentPreloadedOcr = undefined;
+      currentPreloadedAvatars = undefined;
+      appState.setSourceImage(correctedImg);
+      await startAnalysis();
+      showToast("✨ 台形正対化と黒塗りが完了しました！");
+    } catch (err) {
+      console.error("Perspective correction failed:", err);
+      showToast("補正処理に失敗しました。元画像で黒塗り解析を実行します");
+      isPerspectiveMode = false;
+      perspectiveBar.style.display = "none";
+      await startAnalysis();
+    }
   });
 
   // 撮影写真の補正イベント

@@ -90,12 +90,23 @@
         </div>
 
         <!-- Perspective Correction Toolbar (Shown when active) -->
-        <div id="perspectiveBar" style="display: none; background: rgba(2, 132, 199, 0.18); border-bottom: 1px solid var(--primary-light); padding: 0.6rem 1.25rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; z-index: 10;">
-          <span style="font-size: 0.82rem; font-weight: 600; color: var(--primary-light);">🔲 4隅ピンをドラッグすると<b>拡大鏡（虫眼鏡）</b>が表示されます。画面の角にピタッと合わせて「補正を実行」を押してください</span>
-          <div style="display: flex; gap: 0.5rem;">
-            <button id="btnAutoDetectCorners" class="btn btn-secondary btn-sm" title="AIを使わずにエッジ解析で四隅を自動検出">🔍 自動検出</button>
-            <button id="btnApplyPerspective" class="btn btn-primary btn-sm" style="font-weight: bold; background: #0284c7;">補正を実行</button>
-            <button id="btnCancelPerspective" class="btn btn-secondary btn-sm">キャンセル</button>
+        <div id="perspectiveBar" class="perspective-bar" style="display: none;">
+          <div class="perspective-info">
+            <span class="perspective-step-badge">STEP 1</span>
+            <span class="perspective-msg">
+              📐 画面の4隅にピンを合わせてください（ドラッグすると<b>拡大鏡（虫眼鏡）</b>で微調整できます）
+            </span>
+          </div>
+          <div class="perspective-buttons">
+            <button id="btnAutoDetectCorners" class="btn btn-secondary btn-sm" title="AIを使わずにエッジ解析で四隅を自動検出">
+              🔍 四隅を再検出
+            </button>
+            <button id="btnCancelPerspective" class="btn btn-secondary btn-sm" title="補正を行わずにそのまま黒塗り解析を実行します">
+              スキップ (そのまま黒塗り)
+            </button>
+            <button id="btnApplyPerspective" class="btn btn-primary btn-sm btn-highlight-action" title="指定した4隅で正面フラット化し、黒塗り解析を実行します">
+              ✨ 補正して黒塗り実行
+            </button>
           </div>
         </div>
 

@@ -925,27 +925,28 @@ input:checked + .slider:before {
     max-height: 70vh;
   }
 
-  /* 台形補正バー */
-  #perspectiveBar {
+  /* 台形補正バー（スマホ・レスポンシブ） */
+  .perspective-bar {
     padding: 0.5rem 0.75rem !important;
     gap: 0.4rem !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
   }
 
-  #perspectiveBar > span {
-    font-size: 0.75rem !important;
-    width: 100%;
+  .perspective-info {
+    font-size: 0.76rem !important;
   }
 
-  #perspectiveBar > div {
+  .perspective-buttons {
     width: 100%;
     display: grid !important;
-    grid-template-columns: 1.2fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1.3fr !important;
     gap: 0.35rem !important;
   }
 
-  #perspectiveBar .btn-sm {
-    padding: 0.35rem 0.3rem;
-    font-size: 0.72rem;
+  .perspective-buttons .btn-sm {
+    padding: 0.4rem 0.3rem !important;
+    font-size: 0.72rem !important;
     text-align: center;
   }
 
@@ -995,6 +996,66 @@ input:checked + .slider:before {
     text-align: center;
     bottom: 1rem;
   }
+}
+
+/* 台形補正バー (PC & 共通) */
+.perspective-bar {
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 1.5px solid var(--border-focus);
+  padding: 0.65rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  z-index: 20;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.perspective-info {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex: 1;
+  min-width: 260px;
+}
+
+.perspective-step-badge {
+  background: linear-gradient(135deg, #0284c7, #38bdf8);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+.perspective-msg {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e0f2fe;
+}
+
+.perspective-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-highlight-action {
+  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%) !important;
+  font-weight: 700 !important;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.45) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+}
+
+.btn-highlight-action:hover {
+  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%) !important;
+  transform: translateY(-1px);
 }
 
 /* ==========================================================================
