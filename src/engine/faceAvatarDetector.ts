@@ -142,9 +142,10 @@ function detectChatAvatarsStrict(
     Math.round(sw * 0.11)
   ].filter((s) => s >= 18);
 
-  const startY = Math.round(sh * 0.08);
-  const endY = Math.round(sh * 0.93);
-  const xs = [0.03, 0.05, 0.08, 0.11, 0.14].map((r) => Math.round(sw * r));
+  const startY = Math.round(sh * 0.11);
+  const endY = Math.round(sh * 0.90);
+  // 写真中央寄りのチャットや余白のある写真に対応できるよう探索範囲を拡張
+  const xs = [0.05, 0.08, 0.11, 0.14, 0.17, 0.20, 0.23, 0.27].map((r) => Math.round(sw * r));
 
   interface Candidate {
     origX: number;
@@ -155,11 +156,12 @@ function detectChatAvatarsStrict(
   const candidates: Candidate[] = [];
 
   for (const avatarSize of sizes) {
-    const stepY = Math.max(8, Math.round(avatarSize * 0.28));
+    const stepY = Math.max(8, Math.round(avatarSize * 0.25));
     for (const fixedX of xs) {
+      if (fixedX + avatarSize >= sw) continue;
       for (let y = startY; y < endY - avatarSize; y += stepY) {
         const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
-        if (score >= 68) {
+        if (score >= 65) {
           candidates.push({
             origX: Math.round(fixedX / scale),
             origY: Math.round(y / scale),

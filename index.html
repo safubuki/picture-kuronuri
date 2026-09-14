@@ -170,13 +170,33 @@
             📋 画像をクリップボードにコピー
           </button>
 
-          <button id="btnDownloadImage" class="btn btn-secondary btn-block" style="margin-bottom: 1rem;">
+          <button id="btnDownloadImage" class="btn btn-secondary btn-block" style="margin-bottom: 0.85rem;">
             📥 画像をダウンロード (PNG)
           </button>
 
+          <!-- 伏字テキスト抽出（AI相談用） -->
+          <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.75rem; margin-bottom: 0.85rem;">
+            <div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
+              <span>📝 AI相談用テキスト (伏字化済み)</span>
+              <span style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px;">最高精度</span>
+            </div>
+            <p style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.35;">
+              個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[会社名]</code> などに伏字置換したテキストです。画像送信より高速・安全にAIへ質問できます。
+            </p>
+            <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="margin-bottom: 0.5rem; border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600;">
+              ✨ 伏字テキスト＋指示文をコピー
+            </button>
+            <details id="detailsRedactedText" style="font-size: 0.75rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.35rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.06);">
+              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 600; user-select: none;">
+                🔍 伏字テキストをプレビュー
+              </summary>
+              <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 90px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.72rem; padding: 0.4rem; resize: vertical; box-sizing: border-box;" placeholder="解析が完了すると、伏字化されたテキストがここに表示されます"></textarea>
+            </details>
+          </div>
+
           <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.85rem;">
             <label for="aiPromptSelect" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">
-              AI相談用プロンプト定型文:
+              AI相談用プロンプト指示の指定:
             </label>
             <select id="aiPromptSelect" class="ai-prompt-select">
               <option value="summary">要約・決定事項の整理依頼</option>
@@ -184,7 +204,7 @@
               <option value="advice">ビジネスアドバイス・課題分析の依頼</option>
             </select>
             <button id="btnCopyPrompt" class="btn btn-secondary btn-sm btn-block">
-              💬 プロンプト文をコピー
+              💬 プロンプト定型文のみコピー
             </button>
           </div>
         </div>

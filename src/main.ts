@@ -12,6 +12,7 @@ import {
   type Point2D
 } from "./engine/autoDeskew";
 import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine/capturePipeline";
+import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -62,6 +63,8 @@ const btnNewPhotoHeader = document.getElementById("btnNewPhotoHeader") as HTMLBu
 // Sidebar & Settings
 const btnCopyImage = document.getElementById("btnCopyImage") as HTMLButtonElement;
 const btnDownloadImage = document.getElementById("btnDownloadImage") as HTMLButtonElement;
+const btnCopyRedactedText = document.getElementById("btnCopyRedactedText") as HTMLButtonElement;
+const txtRedactedPreview = document.getElementById("txtRedactedPreview") as HTMLTextAreaElement;
 const btnCopyPrompt = document.getElementById("btnCopyPrompt") as HTMLButtonElement;
 const aiPromptSelect = document.getElementById("aiPromptSelect") as HTMLSelectElement;
 
@@ -224,6 +227,31 @@ async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 // 現在の画像の補助メタデータ（サンプル画像等）
 let currentPreloadedOcr: import("./engine/ocr").OcrResult | undefined;
 let currentPreloadedAvatars: { x: number; y: number; width: number; height: number }[] | undefined;
+let lastOcrResult: import("./engine/ocr").OcrResult | null = null;
+
+/**
+ * 伏字テキストプレビューの表示更新
+ */
+function refreshRedactedTextPreview(): void {
+  const state = appState.getState();
+  if (!state.sourceImage || !lastOcrResult || lastOcrResult.lines.length === 0) {
+    if (txtRedactedPreview) {
+      txtRedactedPreview.value = state.sourceImage
+        ? "テキスト抽出中、または文字が検出されませんでした。"
+        : "解析が完了すると、伏字化されたテキストがここに表示されます。";
+    }
+    if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
+    return;
+  }
+
+  const res = generateRedactedText(lastOcrResult, state.boxes);
+  if (txtRedactedPreview) {
+    txtRedactedPreview.value = res.redactedText || "(検出された文字はありませんでした)";
+  }
+  if (btnCopyRedactedText) {
+    btnCopyRedactedText.disabled = !res.redactedText;
+  }
+}
 
 /**
  * DataURLから画像を読み込んで解析を開始
@@ -325,7 +353,10 @@ async function startAnalysis(): Promise<void> {
       currentDetectedDeskewAngle
     );
 
+    lastOcrResult = result.ocrResult;
     appState.setBoxes(result.boxes);
+    refreshRedactedTextPreview();
+
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
     const corrNotice = lastCorrection && !lastCorrection.skipped ? " / 正対化済み" : "";
     const photoNotice = result.ocrResult.analysis?.isLikelyScreenPhoto ? " / 画面撮影向け前処理" : "";
@@ -430,6 +461,7 @@ function syncUiWithState(state: AppState): void {
   const hasImage = !!state.sourceImage;
   btnCopyImage.disabled = !hasImage;
   btnDownloadImage.disabled = !hasImage;
+  btnCopyRedactedText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
   btnCompare.disabled = !hasImage;
   btnReset.disabled = !hasImage;
   btnReanalyze.disabled = !hasImage;
@@ -519,6 +551,9 @@ function syncUiWithState(state: AppState): void {
     });
     customTagsList.appendChild(tag);
   });
+
+  // 伏字テキストプレビューの同期
+  refreshRedactedTextPreview();
 
   // Canvas再描画
   updateCanvasRender();
@@ -904,6 +939,43 @@ function initEvents(): void {
 
     downloadCanvasImage(exportCanvas, `kuronuri_${Date.now()}.png`);
     showToast("画像をダウンロードしました");
+  });
+
+  // 伏字テキスト＋指示文のコピー
+  btnCopyRedactedText.addEventListener("click", async () => {
+    const state = appState.getState();
+    if (!state.sourceImage || !lastOcrResult) {
+      showToast("テキスト解析データがありません");
+      return;
+    }
+    const res = generateRedactedText(lastOcrResult, state.boxes);
+    if (!res.redactedText || res.redactedText.trim().length === 0) {
+      showToast("コピー可能なテキストが見つかりませんでした");
+      return;
+    }
+
+    const promptType = aiPromptSelect.value || "summary";
+    const fullText = buildAiPromptWithRedactedText(res.redactedText, promptType);
+
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(fullText);
+      } else {
+        throw new Error("clipboard API unsupported");
+      }
+      showToast("✨ 伏字テキスト＋指示文をコピーしました！AIにそのまま貼り付け可能です", 4000);
+    } catch {
+      // フォールバック
+      if (txtRedactedPreview) {
+        txtRedactedPreview.value = fullText;
+        txtRedactedPreview.focus();
+        txtRedactedPreview.select();
+        document.execCommand("copy");
+        showToast("✨ 伏字テキスト＋指示文をコピーしました！", 4000);
+      } else {
+        showToast("クリップボードへのコピーに失敗しました");
+      }
+    }
   });
 
   btnCopyPrompt.addEventListener("click", async () => {

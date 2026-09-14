@@ -17,9 +17,6 @@ export const HONORIFICS = [
   "代表", "CEO", "CTO", "CFO", "COO", "CIO", "PM", "PL", "担当"
 ] as const;
 
-// 助詞・接続詞・句読点・中黒・各種記号（人名の境界となる区切り文字）
-const PARTICLES_REGEX = /[をにはがのでへとよりからてで、。！？\s\n\r/／()（）「」:：・·•|｜\-ー_＿,，.．\[\]［］{}｛｝【】『』<><>《》〜~;；]/;
-
 export interface PersonMatch {
   matchedText: string;
   nameOnly: string;
@@ -31,83 +28,103 @@ export interface PersonMatch {
 /**
  * 与えられた文字列の中から人名（名字＋敬称、フルネーム、役職付き人名）を精密に抽出する
  */
+interface CompactMapping {
+  compact: string;
+  origIndices: number[];
+}
+
+function buildCompactMapping(text: string): CompactMapping {
+  let compact = "";
+  const origIndices: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === " " || ch === "\t" || ch === "\u3000") continue;
+    compact += ch;
+    origIndices.push(i);
+  }
+  return { compact, origIndices };
+}
+
+/**
+ * 与えられた文字列の中から人名（名字＋敬称、フルネーム、役職付き人名）を精密に抽出する
+ * OCR特有の空白混入（例:「山 田 太 郎」「山 田 様」）も完全に吸収する
+ */
 export function detectPersonsInText(text: string): PersonMatch[] {
   if (!text) return [];
   const results: PersonMatch[] = [];
+  const { compact, origIndices } = buildCompactMapping(text);
 
-  // 1. 敬称・役職付き人名マッチング
-  // 敬称の直前の 1〜5 文字の名前部分のみを抽出する（直前の助詞や空白は絶対に含めない）
+  const toOrigRange = (cStart: number, cEnd: number): { start: number; end: number } => {
+    const start = origIndices[cStart];
+    const end = origIndices[cEnd - 1] + 1;
+    return { start, end };
+  };
+
   const honorificPattern = HONORIFICS.join("|");
-  // 直前の名前部分は漢字・カタカナ・アルファベット1〜5文字、またはひらがな2〜4文字
-  const honorificRegex = new RegExp(`([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z]{1,6}|[\\p{Script=Hiragana}]{2,4})(?:${honorificPattern})`, "gu");
+
+  // 1. 敬称・役職付き人名マッチング (例: 「山田様」「山 田 様」「田中社長」)
+  const honorificRegex = new RegExp(`([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z]{1,6}|[\\p{Script=Hiragana}]{2,4})(${honorificPattern})`, "gu");
 
   let match: RegExpExecArray | null;
-  while ((match = honorificRegex.exec(text)) !== null) {
-    const fullMatched = match[0];
+  while ((match = honorificRegex.exec(compact)) !== null) {
     const namePart = match[1];
-    const matchStart = match.index;
-
-    // 直前が助詞や句読点でない場合、名前部分の先頭に助詞が含まれていないか確認
-    // 例: "を鈴木部長" -> "鈴木部長"
-    let cleanName = fullMatched;
-    let cleanStart = matchStart;
-    
-    // 名前の先頭1文字がもし助詞なら削る
-    if (PARTICLES_REGEX.test(cleanName[0])) {
-      cleanName = cleanName.slice(1);
-      cleanStart += 1;
-    }
+    const matchedFull = match[0];
+    const cStart = match.index;
+    const cEnd = cStart + matchedFull.length;
+    const { start, end } = toOrigRange(cStart, cEnd);
 
     results.push({
-      matchedText: cleanName,
+      matchedText: text.slice(start, end),
       nameOnly: namePart,
-      startIndex: cleanStart,
-      endIndex: cleanStart + cleanName.length,
+      startIndex: start,
+      endIndex: end,
       reason: "honorific_match"
     });
   }
 
-  // 1b. 中黒区切りの名字列 (例: 「山田・鈴木」)
-  const pairRegex = /([\p{Script=Han}]{2,4})[・･·]([\p{Script=Han}]{2,4})/gu;
-  while ((match = pairRegex.exec(text)) !== null) {
+  // 1b. 中黒・スラッシュ区切りの名字列 (例: 「山田・鈴木」)
+  const pairRegex = /([\p{Script=Han}]{2,4})[・･·/／]([\p{Script=Han}]{2,4})/gu;
+  while ((match = pairRegex.exec(compact)) !== null) {
     const a = match[1];
     const b = match[2];
     if (!matchSurname(a) && !matchSurname(b)) continue;
-    const startIndex = match.index;
-    const endIndex = startIndex + match[0].length;
-    const isCovered = results.some((r) => startIndex >= r.startIndex && endIndex <= r.endIndex);
+    const cStart = match.index;
+    const cEnd = cStart + match[0].length;
+    const { start, end } = toOrigRange(cStart, cEnd);
+
+    const isCovered = results.some((r) => start >= r.startIndex && end <= r.endIndex);
     if (!isCovered) {
       results.push({
-        matchedText: match[0],
-        nameOnly: match[0],
-        startIndex,
-        endIndex,
+        matchedText: text.slice(start, end),
+        nameOnly: text.slice(start, end),
+        startIndex: start,
+        endIndex: end,
         reason: "full_name_pattern"
       });
     }
   }
 
-  // 2. フルネームパターン (例: "山田 太郎", "鈴木 一郎", "山田太郎")
-  // 名字辞書にマッチする名字 + (空白任意) + 1〜3文字の名前
-  const fullNameRegex = /([\p{Script=Han}\p{Script=Katakana}]{1,4})(?:[\s　]+)?([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
-  while ((match = fullNameRegex.exec(text)) !== null) {
+  // 2. フルネームパターン (例: "山田 太郎", "山 田 太 郎", "鈴木 一郎", "山田太郎")
+  const fullNameRegex = /([\p{Script=Han}\p{Script=Katakana}]{1,4})([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
+  while ((match = fullNameRegex.exec(compact)) !== null) {
     const candidateSurname = match[1];
     const candidateGiven = match[2];
     const matchedFull = match[0];
-    const startIndex = match.index;
-    const endIndex = startIndex + matchedFull.length;
+    const cStart = match.index;
+    const cEnd = cStart + matchedFull.length;
+    const { start, end } = toOrigRange(cStart, cEnd);
 
-    // candidateGiven が一般的な助詞・助動詞（「です」「ます」「でした」「から」「より」「こと」「など」）の場合は人名ではない
+    // 助動詞・助詞除外
     if (/^(?:です|ます|でした|から|より|こと|など|との|について|として|ので|ため|よう|わけ)$/.test(candidateGiven)) {
-      // 名字部分だけを登録
       if (matchSurname(candidateSurname)) {
-        const isCovered = results.some(r => startIndex >= r.startIndex && (startIndex + candidateSurname.length) <= r.endIndex);
+        const sEnd = toOrigRange(cStart, cStart + candidateSurname.length).end;
+        const isCovered = results.some(r => start >= r.startIndex && sEnd <= r.endIndex);
         if (!isCovered) {
           results.push({
-            matchedText: candidateSurname,
+            matchedText: text.slice(start, sEnd),
             nameOnly: candidateSurname,
-            startIndex,
-            endIndex: startIndex + candidateSurname.length,
+            startIndex: start,
+            endIndex: sEnd,
             reason: "surname_match"
           });
         }
@@ -115,49 +132,38 @@ export function detectPersonsInText(text: string): PersonMatch[] {
       continue;
     }
 
-    // 名字辞書との一致確認
     if (matchSurname(candidateSurname)) {
-      const isCovered = results.some(r => startIndex >= r.startIndex && endIndex <= r.endIndex);
+      const isCovered = results.some(r => start >= r.startIndex && end <= r.endIndex);
       if (!isCovered) {
         results.push({
-          matchedText: matchedFull,
+          matchedText: text.slice(start, end),
           nameOnly: matchedFull,
-          startIndex,
-          endIndex,
+          startIndex: start,
+          endIndex: end,
           reason: "full_name_pattern"
         });
       }
     }
   }
 
-  // 3. 名字単体マッチング（「山田」「鈴木」）
-  // 単語の前後に助詞がある場合でも、名字部分（2〜4文字）のみを正確に切り出す
-  for (let i = 0; i < text.length; i++) {
-    const isCovered = results.some(r => i >= r.startIndex && i < r.endIndex);
-    if (isCovered) continue;
-
-    const sub = text.slice(i);
+  // 3. 名字単体マッチング (例: 「山田」「鈴木」)
+  for (let i = 0; i < compact.length; i++) {
+    const sub = compact.slice(i);
     const surname = matchSurname(sub);
     if (surname && surname.length >= 2) {
-      // 直前が文字（漢字・ひらがな・カタカナ）でないこと、または助詞であること
-      const prevChar = i > 0 ? text[i - 1] : "";
-      const isStartOfWord = !prevChar || PARTICLES_REGEX.test(prevChar) || !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(prevChar);
-
-      if (isStartOfWord) {
-        // 直後が助詞（「です」「さん」「様」等）または句読点・空白
-        const nextChar = text[i + surname.length] || "";
-        const isEndOfWord = !nextChar || PARTICLES_REGEX.test(nextChar) || /^(?:です|ます|でした|の|は|が|に|を|と)/.test(text.slice(i + surname.length));
-
-        if (isEndOfWord) {
-          results.push({
-            matchedText: surname,
-            nameOnly: surname,
-            startIndex: i,
-            endIndex: i + surname.length,
-            reason: "surname_match"
-          });
-          i += surname.length - 1;
-        }
+      const cStart = i;
+      const cEnd = i + surname.length;
+      const { start, end } = toOrigRange(cStart, cEnd);
+      const isCovered = results.some(r => start >= r.startIndex && end <= r.endIndex);
+      if (!isCovered) {
+        results.push({
+          matchedText: text.slice(start, end),
+          nameOnly: surname,
+          startIndex: start,
+          endIndex: end,
+          reason: "surname_match"
+        });
+        i += surname.length - 1;
       }
     }
   }
@@ -182,21 +188,17 @@ export function isLikelyChatSender(text: string): boolean {
     return false;
   }
 
-  // フルネーム（スペース区切り: 例「山田 太郎」）
-  if (/^[\p{Script=Han}]{1,4}[\s　]+[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,4}$/u.test(t)) {
-    return true;
-  }
-
-  // スペースなしフルネーム（OCRが空白を潰した場合: 「山田太郎」）
-  const compactSurname = matchSurname(t);
-  if (
-    compactSurname &&
-    compactSurname.length >= 2 &&
-    t.length > compactSurname.length &&
-    t.length - compactSurname.length <= 3 &&
-    /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3}$/u.test(t.slice(compactSurname.length))
-  ) {
-    return true;
+  // フルネーム（スペース混入も吸収: 例「山田 太郎」「山 田 太 郎」「山田太郎」「鈴木一郎」）
+  const compact = t.replace(/[\s\t\u3000]/g, "");
+  if (compact.length >= 2 && compact.length <= 8) {
+    const compactSurname = matchSurname(compact);
+    if (compactSurname && compactSurname.length >= 2) {
+      if (compact.length === compactSurname.length) return true; // 名字単体
+      const given = compact.slice(compactSurname.length);
+      if (given.length <= 4 && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,4}$/u.test(given)) {
+        return true; // 名字＋名前
+      }
+    }
   }
 
   // 名字単体（2〜4文字）
