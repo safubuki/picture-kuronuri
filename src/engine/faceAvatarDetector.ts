@@ -159,7 +159,7 @@ function detectChatAvatarsStrict(
     for (const fixedX of xs) {
       for (let y = startY; y < endY - avatarSize; y += stepY) {
         const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
-        if (score > 58) {
+        if (score >= 68) {
           candidates.push({
             origX: Math.round(fixedX / scale),
             origY: Math.round(y / scale),
@@ -247,8 +247,10 @@ function evaluateStrictAvatar(
   const variance = sumSq / count - mean * mean;
   const sat = satSum / count;
 
-  if (variance < 140 || variance > 2200) return 0;
-  if (sat < 0.12) return 0;
+  // 真っ暗（机の影・黒ベゼル）や真っ白（余白）はアバターではない
+  if (mean < 45 || mean > 235) return 0;
+  if (variance < 180 || variance > 2600) return 0;
+  if (sat < 0.10) return 0;
 
   let ringEdge = 0;
   let ringN = 0;
@@ -267,7 +269,25 @@ function evaluateStrictAvatar(
   }
   if (ringN === 0) return 0;
   const ring = ringEdge / ringN;
-  if (ring < 18) return 0;
+  if (ring < 22) return 0;
+
+  // チャットアイコンの右側（吹き出し領域）の存在確認
+  // 右側が完全に真っ黒（机の背景）の場合は誤検出
+  const rightX0 = Math.min(sw - 1, x + size + 4);
+  const rightX1 = Math.min(sw - 1, x + Math.round(size * 2.2));
+  if (rightX1 > rightX0) {
+    let rightSum = 0;
+    let rightCount = 0;
+    for (let rx = rightX0; rx <= rightX1; rx += 3) {
+      rightSum += gray[cy * sw + rx];
+      rightCount++;
+    }
+    if (rightCount > 0) {
+      const rightMean = rightSum / rightCount;
+      // 右側が極端に暗い（< 40: 机や余白）ならチャット画面ではない
+      if (rightMean < 40) return 0;
+    }
+  }
 
   let horizEdge = 0;
   let heN = 0;
@@ -284,5 +304,5 @@ function evaluateStrictAvatar(
   const textish = heN > 0 ? horizEdge / heN : 0;
   if (textish > 28) return 0;
 
-  return Math.min(100, Math.round(ring * 1.4 + sat * 40 + Math.min(30, variance / 40)));
+  return Math.min(100, Math.round(ring * 1.5 + sat * 35 + Math.min(25, variance / 50)));
 }

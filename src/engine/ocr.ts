@@ -70,10 +70,9 @@ export async function getOcrWorker(
   });
 
   await worker.setParameters({
-    // チャット画面・書類は単一カラムの可変サイズ文字が多い
-    tessedit_pageseg_mode: PSM.SINGLE_COLUMN,
-    preserve_interword_spaces: "1",
-    user_defined_dpi: "300"
+    // チャット画面・書類はアバター、ヘッダー、吹き出しが散在するため AUTO（完全自動セグメンテーション）が最適
+    tessedit_pageseg_mode: PSM.AUTO,
+    preserve_interword_spaces: "1"
   });
 
   cachedWorker = worker;
@@ -414,11 +413,19 @@ export async function runOcr(
   }
 
   onProgress?.({ status: "テキスト認識・座標解析中...", progress: 0.38 });
-  const result = await worker.recognize(
-    ocrInput,
-    {},
-    { text: true, blocks: true }
-  );
+  
+  // 18秒タイムアウト保護（Workerハングやネットワーク不通でアプリが止まるのを防止）
+  const timeoutPromise = new Promise<{ data?: any }>((resolve) => {
+    setTimeout(() => {
+      console.warn("OCR recognize timed out after 18s, falling back gracefully");
+      resolve({ data: { text: "", blocks: [], lines: [] } });
+    }, 18000);
+  });
+
+  const result = await Promise.race([
+    worker.recognize(ocrInput, {}, { text: true, blocks: true }),
+    timeoutPromise
+  ]);
 
   const parsed = parseRecognizeData(result?.data || {});
   scaleOcrGeometry(parsed.lines, parsed.symbols, scale);

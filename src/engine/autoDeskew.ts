@@ -168,7 +168,8 @@ export function applyPerspectiveTransform(
 
   let outW = Math.round(outputWidth || Math.max(topW, bottomW, 300));
   let outH = Math.round(outputHeight || Math.max(leftH, rightH, 400));
-  const maxSide = 2400;
+  // 高速化とメモリ保護のため最大長辺を1800pxに制限
+  const maxSide = 1800;
   if (outW > maxSide || outH > maxSide) {
     const s = maxSide / Math.max(outW, outH);
     outW = Math.max(300, Math.round(outW * s));
@@ -206,39 +207,44 @@ export function applyPerspectiveTransform(
     ]
   );
 
-  // 逆マッピングによるピクセル補間
+  // 高速バイリニア補間（メインスレッドのフリーズを完全防止）
   const inData = inCtx.getImageData(0, 0, origW, origH);
   const outData = outCtx.createImageData(outW, outH);
   const inPixels = inData.data;
   const outPixels = outData.data;
 
   for (let dy = 0; dy < outH; dy++) {
+    const rowOffset = dy * outW * 4;
     for (let dx = 0; dx < outW; dx++) {
       // 逆投影座標の計算 (sx, sy)
       const denom = H[6] * dx + H[7] * dy + H[8];
+      if (Math.abs(denom) < 1e-7) continue;
       const sx = (H[0] * dx + H[1] * dy + H[2]) / denom;
       const sy = (H[3] * dx + H[4] * dy + H[5]) / denom;
 
-      const outIdx = (dy * outW + dx) * 4;
+      const outIdx = rowOffset + (dx * 4);
 
-      if (sx >= 1 && sx < origW - 2 && sy >= 1 && sy < origH - 2) {
-        sampleCatmullRom(inPixels, origW, sx, sy, outPixels, outIdx);
-      } else if (sx >= 0 && sx < origW - 1 && sy >= 0 && sy < origH - 1) {
+      if (sx >= 0 && sx < origW - 1 && sy >= 0 && sy < origH - 1) {
         const x0 = Math.floor(sx);
         const y0 = Math.floor(sy);
         const x1 = x0 + 1;
         const y1 = y0 + 1;
         const fx = sx - x0;
         const fy = sy - y0;
+        const w00 = (1 - fx) * (1 - fy);
+        const w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy;
+        const w11 = fx * fy;
+
         const idx00 = (y0 * origW + x0) * 4;
         const idx10 = (y0 * origW + x1) * 4;
         const idx01 = (y1 * origW + x0) * 4;
         const idx11 = (y1 * origW + x1) * 4;
-        for (let c = 0; c < 4; c++) {
-          const top = inPixels[idx00 + c] * (1 - fx) + inPixels[idx10 + c] * fx;
-          const bottom = inPixels[idx01 + c] * (1 - fx) + inPixels[idx11 + c] * fx;
-          outPixels[outIdx + c] = top * (1 - fy) + bottom * fy + 0.5;
-        }
+
+        outPixels[outIdx] = inPixels[idx00] * w00 + inPixels[idx10] * w10 + inPixels[idx01] * w01 + inPixels[idx11] * w11 + 0.5;
+        outPixels[outIdx + 1] = inPixels[idx00 + 1] * w00 + inPixels[idx10 + 1] * w10 + inPixels[idx01 + 1] * w01 + inPixels[idx11 + 1] * w11 + 0.5;
+        outPixels[outIdx + 2] = inPixels[idx00 + 2] * w00 + inPixels[idx10 + 2] * w10 + inPixels[idx01 + 2] * w01 + inPixels[idx11 + 2] * w11 + 0.5;
+        outPixels[outIdx + 3] = 255;
       } else {
         outPixels[outIdx] = 11;
         outPixels[outIdx + 1] = 13;
@@ -252,60 +258,7 @@ export function applyPerspectiveTransform(
   return outCanvas;
 }
 
-function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
-  return 0.5 * (
-    2 * p1 +
-    (-p0 + p2) * t +
-    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t +
-    (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t
-  );
-}
 
-function sampleCatmullRom(
-  data: Uint8ClampedArray,
-  w: number,
-  x: number,
-  y: number,
-  out: Uint8ClampedArray,
-  oi: number
-): void {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const fx = x - x0;
-  const fy = y - y0;
-  for (let c = 0; c < 4; c++) {
-    const col0 = catmullRom(
-      data[((y0 - 1) * w + (x0 - 1)) * 4 + c],
-      data[((y0 - 1) * w + x0) * 4 + c],
-      data[((y0 - 1) * w + (x0 + 1)) * 4 + c],
-      data[((y0 - 1) * w + (x0 + 2)) * 4 + c],
-      fx
-    );
-    const col1 = catmullRom(
-      data[(y0 * w + (x0 - 1)) * 4 + c],
-      data[(y0 * w + x0) * 4 + c],
-      data[(y0 * w + (x0 + 1)) * 4 + c],
-      data[(y0 * w + (x0 + 2)) * 4 + c],
-      fx
-    );
-    const col2 = catmullRom(
-      data[((y0 + 1) * w + (x0 - 1)) * 4 + c],
-      data[((y0 + 1) * w + x0) * 4 + c],
-      data[((y0 + 1) * w + (x0 + 1)) * 4 + c],
-      data[((y0 + 1) * w + (x0 + 2)) * 4 + c],
-      fx
-    );
-    const col3 = catmullRom(
-      data[((y0 + 2) * w + (x0 - 1)) * 4 + c],
-      data[((y0 + 2) * w + x0) * 4 + c],
-      data[((y0 + 2) * w + (x0 + 1)) * 4 + c],
-      data[((y0 + 2) * w + (x0 + 2)) * 4 + c],
-      fx
-    );
-    const v = catmullRom(col0, col1, col2, col3, fy);
-    out[oi + c] = v < 0 ? 0 : v > 255 ? 255 : v + 0.5;
-  }
-}
 
 /**
  * 4組の対応点から3x3のホモグラフィ行列 H を計算

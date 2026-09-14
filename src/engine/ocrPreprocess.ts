@@ -478,7 +478,7 @@ function invertGray(src: Uint8Array): Uint8Array {
 /**
  * 暗い文字ストローク向けのクロージング（先に min で隙間を埋め、max で太さを戻す）
  */
-function morphCloseDarkText(src: Uint8Array, w: number, h: number): Uint8Array {
+export function morphCloseDarkText(src: Uint8Array, w: number, h: number): Uint8Array {
   const erode = new Uint8Array(w * h);
   const out = new Uint8Array(w * h);
   for (let y = 1; y < h - 1; y++) {
@@ -582,28 +582,17 @@ export function preprocessForOcr(
     gray[p] = luminance(data[i], data[i + 1], data[i + 2]) + 0.5;
   }
 
-  const smallText =
-    analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 18;
-
-  if (analysis.isLikelyScreenPhoto || smallText) {
-    gray = median3x3(gray, w, h);
-    const radius = analysis.isLikelyScreenPhoto ? 4 : 3;
-    gray = guidedFilter(gray, gray, w, h, radius, 80);
-  }
-
-  gray = claheGray(gray, w, h, 8, 8, analysis.isLikelyScreenPhoto ? 2.6 : 2.2);
+  // マイルドなCLAHE（コントラスト適応伸張）のみ適用して文字の可読性を最大化
+  // 過剰な平滑化や強いアンシャープマスクは漢字の画を潰すため行わない
+  gray = claheGray(gray, w, h, 6, 6, 1.8);
 
   if (analysis.isDarkBackground) {
     gray = invertGray(gray);
   }
 
-  const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.8);
-  const sharpAmt = analysis.isLikelyScreenPhoto ? 0.7 : 0.55;
-  gray = unsharp(gray, blurForSharp, sharpAmt);
-
-  if (smallText && analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 12) {
-    gray = morphCloseDarkText(gray, w, h);
-  }
+  // 弱めのマイルドシャープ（かすれ文字の補強）
+  const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.6);
+  gray = unsharp(gray, blurForSharp, 0.35);
 
   return {
     canvas: grayToCanvas(gray, w, h),

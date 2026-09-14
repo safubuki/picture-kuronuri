@@ -31,10 +31,11 @@ function fitWindowToInk(
   h: number,
   rect: InkRect
 ): InkRect | null {
-  if (rect.width < 2 || rect.height < 2) return null;
+  if (rect.width < 4 || rect.height < 4) return null;
 
-  const padX = Math.max(14, Math.round(rect.width * 0.85), Math.round(w * 0.03));
-  const padY = Math.max(10, Math.round(rect.height * 1.1));
+  // 探索範囲を元の矩形近傍（数px）に厳格制限（隣の文字やアイコンを巻き込まない）
+  const padX = Math.min(8, Math.max(3, Math.round(rect.width * 0.12)));
+  const padY = Math.min(6, Math.max(3, Math.round(rect.height * 0.15)));
   const x0 = clamp(Math.floor(rect.x - padX), 0, w - 1);
   const y0 = clamp(Math.floor(rect.y - padY), 0, h - 1);
   const x1 = clamp(Math.ceil(rect.x + rect.width + padX), 0, w - 1);
@@ -84,7 +85,7 @@ function fitWindowToInk(
     }
   }
 
-  if (inkN < 10 || inkN > n * 0.5) return null;
+  if (inkN < 6 || inkN > n * 0.7) return null;
 
   const fitted: InkRect = {
     x: minX,
@@ -93,19 +94,11 @@ function fitWindowToInk(
     height: Math.max(1, maxY - minY + 1)
   };
 
-  if (fitted.width < 4 || fitted.height < 4) return null;
-  if (fitted.height > rect.height * 2.8 && fitted.height > 48) {
-    fitted.y = Math.max(fitted.y, Math.round(rect.y - rect.height * 0.35));
-    fitted.height = Math.min(fitted.height, Math.round(rect.height * 1.8));
-  }
-  if (fitted.width > rect.width * 3.5 && fitted.width > 80) {
-    const cx = rect.x + rect.width / 2;
-    const maxW = Math.round(rect.width * 2.4);
-    fitted.x = Math.round(cx - maxW / 2);
-    fitted.width = maxW;
-  }
+  // 元のサイズからかけ離れた膨張（1.25倍超）や極端な縮小は拒絶
+  if (fitted.width > rect.width * 1.3 || fitted.width < rect.width * 0.7) return null;
+  if (fitted.height > rect.height * 1.3 || fitted.height < rect.height * 0.7) return null;
+  if (overlapRatio(fitted, rect) < 0.6) return null;
 
-  if (overlapRatio(fitted, rect) < 0.08) return null;
   return fitted;
 }
 
@@ -133,10 +126,11 @@ export function snapBoxesToInk(
   }
 
   for (const box of boxes) {
-    if (box.isManual || box.type === "face") continue;
+    // 顔写真やチャットアバターは文字ではないので絶対にスナップしない！
+    if (box.isManual || box.type === "face" || box.type === "avatar") continue;
     const fitted = fitWindowToInk(gray, w, h, box.rect);
     if (!fitted) continue;
-    const pad = 2;
+    const pad = 1;
     box.rect.x = Math.max(0, fitted.x - pad);
     box.rect.y = Math.max(0, fitted.y - pad);
     box.rect.width = Math.min(w - box.rect.x, fitted.width + pad * 2);

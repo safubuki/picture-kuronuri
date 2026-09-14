@@ -53,12 +53,13 @@ export function detectCompaniesInText(text: string): CompanyMatch[] {
     const escaped = escapeRegex(foldVisualJa(corp));
     // 「株式会社」に続く社名部分（漢字・カタカナ・アルファベット・数字・中黒・ハイフン）
     // ひらがなは助詞にぶつかるまでか、カタカナ・漢字のみ
-    const prefixRegex = new RegExp(`${escaped}\\s*([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20}|[\\p{Script=Hiragana}\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20})`, "gu");
+    const prefixRegex = new RegExp(`(${escaped})\\s*([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20}|[\\p{Script=Hiragana}\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20})`, "gu");
     
     let match: RegExpExecArray | null;
     while ((match = prefixRegex.exec(folded)) !== null) {
       const matchIndex = match.index;
-      const namePart = match[1];
+      const matchedCorp = match[1];
+      const namePart = match[2];
 
       // namePart の中から、助詞（「の」「は」「が」など）が現れたらそこでカットする！
       let cleanNamePart = "";
@@ -71,8 +72,11 @@ export function detectCompaniesInText(text: string): CompanyMatch[] {
       }
 
       if (cleanNamePart.length > 0) {
-        const finalCorpName = text.slice(matchIndex, matchIndex + corp.length + cleanNamePart.length);
-        if (finalCorpName.length > corp.length) {
+        // match[0] の中で matchedCorp と cleanNamePart を含む実長
+        const cutOffLen = namePart.length - cleanNamePart.length;
+        const totalLen = match[0].length - cutOffLen;
+        const finalCorpName = text.slice(matchIndex, matchIndex + totalLen);
+        if (finalCorpName.length >= matchedCorp.length + 1) {
           results.push({
             matchedText: finalCorpName,
             startIndex: matchIndex,

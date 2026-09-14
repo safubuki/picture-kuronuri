@@ -224,20 +224,26 @@ export async function analyzeImageForRedaction(
     }
   }
 
-  onProgress?.({ status: "黒塗り位置を文字に合わせて調整中...", progress: 0.94 });
-  try {
-    snapBoxesToInk(imageElement, boxes);
-  } catch (err) {
-    console.warn("Ink snap failed:", err);
+  // サンプル画像（事前定義メタデータあり）の場合は、位置ズレや誤マージを起こさないようスナップとマージをバイパス
+  const isSampleOrPreloaded = !!preloadedOcr || (preloadedAvatars && preloadedAvatars.length > 0);
+
+  if (!isSampleOrPreloaded) {
+    onProgress?.({ status: "黒塗り位置を文字に合わせて調整中...", progress: 0.94 });
+    try {
+      snapBoxesToInk(imageElement, boxes);
+    } catch (err) {
+      console.warn("Ink snap failed:", err);
+    }
   }
 
   // 重複矩形の整理（同じ領域に対する完全重複・包含を排除）
-  const uniqueBoxes = mergeAdjacentBoxes(removeDuplicateBoxes(boxes));
+  const dedupedBoxes = removeDuplicateBoxes(boxes);
+  const finalBoxes = isSampleOrPreloaded ? dedupedBoxes : mergeAdjacentBoxes(dedupedBoxes);
 
   onProgress?.({ status: "解析完了", progress: 1.0 });
 
   return {
-    boxes: uniqueBoxes,
+    boxes: finalBoxes,
     ocrResult
   };
 }

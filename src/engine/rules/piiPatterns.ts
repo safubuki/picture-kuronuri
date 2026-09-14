@@ -37,9 +37,10 @@ function pushUnique(results: PiiMatch[], item: PiiMatch): void {
 function detectLabeledValues(text: string): PiiMatch[] {
   const results: PiiMatch[] = [];
   const rules: { re: RegExp; category: PiiMatch["category"]; label: string }[] = [
-    { re: /(?:Email|E-?mail|メール(?:アドレス)?)\s*[:：]\s*(.+)$/iu, category: "email", label: "メールアドレス" },
-    { re: /(?:TEL|Tel|電話(?:番号)?)\s*[:：]\s*(.+)$/iu, category: "phone", label: "電話番号" },
-    { re: /(?:住所|Address)\s*[:：]?\s*(.+)$/iu, category: "address", label: "住所" }
+    // コロンの欠落・スペース混入・大文字小文字に対応
+    { re: /(?:Email|E-?mail|メール(?:アドレス)?)\s*[:：\s]\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9.-]+(?:\.[a-zA-Z]{2,})?)/iu, category: "email", label: "メールアドレス" },
+    { re: /(?:TEL|Tel|電話(?:番号)?)\s*[:：\s]\s*([0-9０-９\-ー−–‐・･\s]{8,15})/iu, category: "phone", label: "電話番号" },
+    { re: /(?:住所|Address)\s*[:：\s]?\s*([^、。\n\r]{4,30})/iu, category: "address", label: "住所" }
   ];
   for (const rule of rules) {
     const m = rule.re.exec(text);
@@ -66,13 +67,13 @@ export function detectPiiInText(text: string): PiiMatch[] {
   // 1. 電話番号・携帯番号
   // 撮影OCRで入りがちな O/0 混同、中点・空白・各種ダッシュも許容
   const phoneRegex =
-    /(?:0|O|o|〇)[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{3,5}|(?:0[789]0\d{8}|0\d{9,10})\b/g;
+    /(?:0|O|o|〇)[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{3,5}|(?:0[789]0[\s\-]?\d{4}[\s\-]?\d{4}|0\d{1,4}[\s\-]?\d{1,4}[\s\-]?\d{4})\b/g;
   let match: RegExpExecArray | null;
   while ((match = phoneRegex.exec(text)) !== null) {
     const raw = match[0].trim();
     const digits = raw.replace(/[OoｏＯ〇○]/g, "0").replace(/\D/g, "");
-    if (digits.length < 10 || digits.length > 11) continue;
-    results.push({
+    if (digits.length < 9 || digits.length > 11) continue;
+    pushUnique(results, {
       matchedText: raw,
       startIndex: match.index,
       endIndex: match.index + match[0].length,
@@ -85,7 +86,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
   const emailRegex = /[a-zA-Z0-9][a-zA-Z0-9_.+-]*\s*[@＠]\s*[a-zA-Z0-9][a-zA-Z0-9.-]*\s*[.．]\s*[a-zA-Z]{2,}/g;
   while ((match = emailRegex.exec(text)) !== null) {
     pushUnique(results, {
-      matchedText: match[0].replace(/\s+/g, ""),
+      matchedText: match[0],
       startIndex: match.index,
       endIndex: match.index + match[0].length,
       category: "email",
@@ -108,14 +109,14 @@ export function detectPiiInText(text: string): PiiMatch[] {
     }
   }
 
-  // 4. 住所パターン (都道府県から始まり、丁目番地号で終わる部分のみ)
-  // 例: "住所: 東京都千代田区丸の内1-2-3" -> "東京都千代田区丸の内1-2-3" のみ
-  const addressRegex = new RegExp(`(?:${PREF_PATTERN})[^\\s\\n\\r0-9０-９]{1,12}[0-9０-９ー丁目番地号-]+`, "gu");
+  // 4. 住所パターン (都道府県から始まり、市区町村・番地で終わる。OCR空白混入を許容)
+  // 例: "東京都 千代田区 丸の内 1-2-3"
+  const addressRegex = new RegExp(`(?:${PREF_PATTERN})[^\n\r0-9０-９、。！？]{1,25}[0-9０-９ー丁目番地号\\-\\s]+`, "gu");
   while ((match = addressRegex.exec(text)) !== null) {
     pushUnique(results, {
-      matchedText: match[0],
+      matchedText: match[0].trim(),
       startIndex: match.index,
-      endIndex: match.index + match[0].length,
+      endIndex: match.index + match[0].trim().length,
       category: "address",
       label: "住所"
     });

@@ -170,7 +170,8 @@ function handleImageFile(file: File): void {
   void (async () => {
     try {
       const img = await loadImageFromFile(file);
-      await ingestCapturedImage(img, { autoCorrect: true });
+      // 元の高画質・シャープネスを保ったまま読み込み（歪み補正は「⚡ 自動フラット化」ボタンで実行可能）
+      await ingestCapturedImage(img, { autoCorrect: false });
     } catch (err) {
       console.error(err);
       showToast("画像の読み込みに失敗しました");
