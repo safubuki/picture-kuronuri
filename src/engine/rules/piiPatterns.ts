@@ -23,9 +23,45 @@ export const PREFECTURES = [
 
 const PREF_PATTERN = PREFECTURES.join("|");
 
+function pushUnique(results: PiiMatch[], item: PiiMatch): void {
+  const covered = results.some(
+    (r) => item.startIndex >= r.startIndex && item.endIndex <= r.endIndex
+  );
+  if (!covered) results.push(item);
+}
+
+/**
+ * 「Email:」「住所:」などラベルの直後から行末までを値として取る。
+ * OCRがアドレス自体を崩しても、値の位置だけは隠せる。
+ */
+function detectLabeledValues(text: string): PiiMatch[] {
+  const results: PiiMatch[] = [];
+  const rules: { re: RegExp; category: PiiMatch["category"]; label: string }[] = [
+    { re: /(?:Email|E-?mail|メール(?:アドレス)?)\s*[:：]\s*(.+)$/iu, category: "email", label: "メールアドレス" },
+    { re: /(?:TEL|Tel|電話(?:番号)?)\s*[:：]\s*(.+)$/iu, category: "phone", label: "電話番号" },
+    { re: /(?:住所|Address)\s*[:：]?\s*(.+)$/iu, category: "address", label: "住所" }
+  ];
+  for (const rule of rules) {
+    const m = rule.re.exec(text);
+    if (!m || !m[1]) continue;
+    const value = m[1].trim();
+    if (value.length < 3) continue;
+    const startIndex = text.indexOf(m[1], m.index);
+    if (startIndex < 0) continue;
+    results.push({
+      matchedText: value,
+      startIndex,
+      endIndex: startIndex + m[1].length,
+      category: rule.category,
+      label: rule.label
+    });
+  }
+  return results;
+}
+
 export function detectPiiInText(text: string): PiiMatch[] {
   if (!text) return [];
-  const results: PiiMatch[] = [];
+  const results: PiiMatch[] = detectLabeledValues(text);
 
   // 1. 電話番号・携帯番号
   // 撮影OCRで入りがちな O/0 混同、中点・空白・各種ダッシュも許容
@@ -46,9 +82,9 @@ export function detectPiiInText(text: string): PiiMatch[] {
   }
 
   // 2. メールアドレス（@ 前後の空白・全角化済みの半角を許容）
-  const emailRegex = /\b[a-zA-Z0-9_.+-]+\s*@\s*[a-zA-Z0-9-]+\s*\.\s*[a-zA-Z0-9-.]+\b/g;
+  const emailRegex = /[a-zA-Z0-9][a-zA-Z0-9_.+-]*\s*[@＠]\s*[a-zA-Z0-9][a-zA-Z0-9.-]*\s*[.．]\s*[a-zA-Z]{2,}/g;
   while ((match = emailRegex.exec(text)) !== null) {
-    results.push({
+    pushUnique(results, {
       matchedText: match[0].replace(/\s+/g, ""),
       startIndex: match.index,
       endIndex: match.index + match[0].length,
@@ -76,7 +112,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
   // 例: "住所: 東京都千代田区丸の内1-2-3" -> "東京都千代田区丸の内1-2-3" のみ
   const addressRegex = new RegExp(`(?:${PREF_PATTERN})[^\\s\\n\\r0-9０-９]{1,12}[0-9０-９ー丁目番地号-]+`, "gu");
   while ((match = addressRegex.exec(text)) !== null) {
-    results.push({
+    pushUnique(results, {
       matchedText: match[0],
       startIndex: match.index,
       endIndex: match.index + match[0].length,

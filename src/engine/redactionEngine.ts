@@ -3,6 +3,7 @@ import { runOcr, type OcrResult, type OcrLine, type OcrProgress } from "./ocr";
 import { detectCompaniesInText } from "./rules/companyRules";
 import { detectPersonsInText, isLikelyChatSender } from "./rules/honorifics";
 import { detectPiiInText } from "./rules/piiPatterns";
+import { snapBoxesToInk } from "./inkSnap";
 
 export type RedactType =
   | "face"
@@ -214,12 +215,20 @@ export async function analyzeImageForRedaction(
   }
 
   // 傾き角度の反映（斜め文字行の追従マスキング用）
-  if (rotationAngle !== 0) {
+  // すでに画素側で正対化している場合は回転を掛けない（箱が文字からズレる）
+  if (rotationAngle !== 0 && Math.abs(rotationAngle) >= 0.8) {
     for (const b of boxes) {
       if (b.rotation === undefined) {
         b.rotation = rotationAngle;
       }
     }
+  }
+
+  onProgress?.({ status: "黒塗り位置を文字に合わせて調整中...", progress: 0.94 });
+  try {
+    snapBoxesToInk(imageElement, boxes);
+  } catch (err) {
+    console.warn("Ink snap failed:", err);
   }
 
   // 重複矩形の整理（同じ領域に対する完全重複・包含を排除）

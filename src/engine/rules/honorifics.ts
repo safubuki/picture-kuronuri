@@ -67,6 +67,26 @@ export function detectPersonsInText(text: string): PersonMatch[] {
     });
   }
 
+  // 1b. 中黒区切りの名字列 (例: 「山田・鈴木」)
+  const pairRegex = /([\p{Script=Han}]{2,4})[・･·]([\p{Script=Han}]{2,4})/gu;
+  while ((match = pairRegex.exec(text)) !== null) {
+    const a = match[1];
+    const b = match[2];
+    if (!matchSurname(a) && !matchSurname(b)) continue;
+    const startIndex = match.index;
+    const endIndex = startIndex + match[0].length;
+    const isCovered = results.some((r) => startIndex >= r.startIndex && endIndex <= r.endIndex);
+    if (!isCovered) {
+      results.push({
+        matchedText: match[0],
+        nameOnly: match[0],
+        startIndex,
+        endIndex,
+        reason: "full_name_pattern"
+      });
+    }
+  }
+
   // 2. フルネームパターン (例: "山田 太郎", "鈴木 一郎", "山田太郎")
   // 名字辞書にマッチする名字 + (空白任意) + 1〜3文字の名前
   const fullNameRegex = /([\p{Script=Han}\p{Script=Katakana}]{1,4})(?:[\s　]+)?([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
@@ -150,8 +170,9 @@ export function detectPersonsInText(text: string): PersonMatch[] {
  * 送信者名である可能性を判定するヒューリスティック
  */
 export function isLikelyChatSender(text: string): boolean {
-  const t = text.trim();
-  if (t.length < 1 || t.length > 15) return false;
+  let t = text.trim();
+  t = t.replace(/\s*(?:\d{1,2}:\d{2}|既読|未読|送信済み)\s*$/g, "").trim();
+  if (t.length < 1 || t.length > 18) return false;
 
   // タイムスタンプやシステムメッセージ、プロジェクト名・ルーム名は除外
   if (/^(?:\d{1,2}:\d{2}|既読|未読|送信済み|今日|昨日|\d{1,2}\/\d{1,2})$/.test(t)) {

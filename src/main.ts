@@ -303,11 +303,12 @@ async function startAnalysis(): Promise<void> {
   appState.setAnalyzing(true, "解析を準備中...", 0);
 
   try {
-    // 斜め文字行の傾き検出（AI不使用・行投影分散法）
+    // 画素を正対化済みなら、箱だけ傾けると位置がずれるので追従しない
     currentDetectedDeskewAngle = 0;
-    if (toggleFollowSlope.checked) {
+    const alreadyFrontal = !!(lastCorrection && !lastCorrection.skipped);
+    if (toggleFollowSlope.checked && !alreadyFrontal) {
       const detected = detectImageDeskewAngle(state.sourceImage);
-      if (Math.abs(detected) >= 0.4) {
+      if (Math.abs(detected) >= 0.8) {
         currentDetectedDeskewAngle = detected;
       }
     }

@@ -136,17 +136,15 @@ function detectChatAvatarsStrict(
     gray[i / 4] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
   }
 
-  // アバターの典型的なサイズ（scaledCanvas上）: 幅の 6%〜14%
-  const avatarSize = Math.round(sw * 0.08);
-  if (avatarSize < 20) return [];
+  const sizes = [
+    Math.round(sw * 0.07),
+    Math.round(sw * 0.09),
+    Math.round(sw * 0.11)
+  ].filter((s) => s >= 18);
 
-  // アバターのX座標は左端（X: 3%〜8%）に固定して並ぶ
-  const fixedX = Math.round(sw * 0.05);
-
-  // 上端10%（ヘッダー部分）と下端5%（入力欄）を除外して縦走査
-  const startY = Math.round(sh * 0.12);
-  const endY = Math.round(sh * 0.92);
-  const stepY = Math.max(15, Math.round(avatarSize * 0.5));
+  const startY = Math.round(sh * 0.08);
+  const endY = Math.round(sh * 0.93);
+  const xs = [0.03, 0.05, 0.08, 0.11, 0.14].map((r) => Math.round(sw * r));
 
   interface Candidate {
     origX: number;
@@ -156,15 +154,20 @@ function detectChatAvatarsStrict(
   }
   const candidates: Candidate[] = [];
 
-  for (let y = startY; y < endY - avatarSize; y += stepY) {
-    const score = evaluateStrictAvatar(gray, sw, sh, fixedX, y, avatarSize);
-    if (score > 50) {
-      candidates.push({
-        origX: Math.round(fixedX / scale),
-        origY: Math.round(y / scale),
-        origSize: Math.round(avatarSize / scale),
-        score
-      });
+  for (const avatarSize of sizes) {
+    const stepY = Math.max(8, Math.round(avatarSize * 0.28));
+    for (const fixedX of xs) {
+      for (let y = startY; y < endY - avatarSize; y += stepY) {
+        const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
+        if (score > 58) {
+          candidates.push({
+            origX: Math.round(fixedX / scale),
+            origY: Math.round(y / scale),
+            origSize: Math.round(avatarSize / scale),
+            score
+          });
+        }
+      }
     }
   }
 
@@ -173,7 +176,12 @@ function detectChatAvatarsStrict(
 
   for (const c of candidates) {
     const rect = { x: c.origX, y: c.origY, width: c.origSize, height: c.origSize };
-    const isDup = avatars.some(a => isOverlap(a.rect, rect, 0.2));
+    const isDup = avatars.some((a) => {
+      if (isOverlap(a.rect, rect, 0.2)) return true;
+      const sameCol = Math.abs(a.rect.x - rect.x) < rect.width * 0.6;
+      const closeY = Math.abs(a.rect.y - rect.y) < rect.height * 0.55;
+      return sameCol && closeY;
+    });
     if (!isDup) {
       avatars.push({
         id: `avatar-strict-${c.origX}-${c.origY}`,
@@ -195,6 +203,7 @@ function detectChatAvatarsStrict(
  */
 function evaluateStrictAvatar(
   gray: Uint8Array,
+  rgba: Uint8ClampedArray,
   sw: number,
   sh: number,
   x: number,
@@ -206,56 +215,74 @@ function evaluateStrictAvatar(
   let sum = 0;
   let sumSq = 0;
   let count = 0;
+  let satSum = 0;
   const half = Math.floor(size / 2);
   const cx = x + half;
   const cy = y + half;
-  const radiusSq = (half * 0.85) * (half * 0.85);
+  const innerR = half * 0.72;
+  const innerR2 = innerR * innerR;
 
-  for (let dy = -half; dy <= half; dy += 2) {
-    for (let dx = -half; dx <= half; dx += 2) {
-      if (dx * dx + dy * dy <= radiusSq) {
-        const px = cx + dx;
-        const py = cy + dy;
-        if (px >= 0 && px < sw && py >= 0 && py < sh) {
-          const val = gray[py * sw + px];
-          sum += val;
-          sumSq += val * val;
-          count++;
-        }
-      }
+  for (let dy = -half; dy <= half; dy += 1) {
+    for (let dx = -half; dx <= half; dx += 1) {
+      if (dx * dx + dy * dy > innerR2) continue;
+      const px = cx + dx;
+      const py = cy + dy;
+      if (px < 0 || px >= sw || py < 0 || py >= sh) continue;
+      const val = gray[py * sw + px];
+      sum += val;
+      sumSq += val * val;
+      count++;
+      const i = (py * sw + px) * 4;
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+      const maxc = Math.max(r, g, b);
+      const minc = Math.min(r, g, b);
+      satSum += maxc === 0 ? 0 : (maxc - minc) / maxc;
     }
   }
 
   if (count === 0) return 0;
   const mean = sum / count;
-  const variance = (sumSq / count) - (mean * mean);
+  const variance = sumSq / count - mean * mean;
+  const sat = satSum / count;
 
-  // 単色の余白背景（分散 < 100）や、文字だらけのテキスト領域（分散 > 2500）は完全排除
-  if (variance < 120 || variance > 2500) return 0;
+  if (variance < 140 || variance > 2200) return 0;
+  if (sat < 0.12) return 0;
 
-  // アイコン周囲の背景（4方向）とのコントラストチェック
-  const testDist = half + 4;
-  const testPoints = [
-    { x: cx - testDist, y: cy },
-    { x: cx + testDist, y: cy },
-    { x: cx, y: cy - testDist },
-    { x: cx, y: cy + testDist }
-  ];
+  let ringEdge = 0;
+  let ringN = 0;
+  const r0 = half * 0.78;
+  const r1 = half * 1.05;
+  for (let a = 0; a < 24; a++) {
+    const rad = (a / 24) * Math.PI * 2;
+    const xOut = Math.round(cx + Math.cos(rad) * r1);
+    const yOut = Math.round(cy + Math.sin(rad) * r1);
+    const xIn = Math.round(cx + Math.cos(rad) * r0);
+    const yIn = Math.round(cy + Math.sin(rad) * r0);
+    if (xOut < 0 || yOut < 0 || xOut >= sw || yOut >= sh) continue;
+    if (xIn < 0 || yIn < 0 || xIn >= sw || yIn >= sh) continue;
+    ringEdge += Math.abs(gray[yOut * sw + xOut] - gray[yIn * sw + xIn]);
+    ringN++;
+  }
+  if (ringN === 0) return 0;
+  const ring = ringEdge / ringN;
+  if (ring < 18) return 0;
 
-  let borderDiffSum = 0;
-  let validPoints = 0;
-  for (const pt of testPoints) {
-    if (pt.x >= 0 && pt.x < sw && pt.y >= 0 && pt.y < sh) {
-      borderDiffSum += Math.abs(mean - gray[pt.y * sw + pt.x]);
-      validPoints++;
+  let horizEdge = 0;
+  let heN = 0;
+  for (let dy = -Math.floor(innerR); dy <= innerR; dy += 2) {
+    for (let dx = -Math.floor(innerR); dx < innerR; dx += 2) {
+      if (dx * dx + dy * dy > innerR2) continue;
+      const px = cx + dx;
+      const py = cy + dy;
+      if (px < 1 || px >= sw - 1 || py < 0 || py >= sh) continue;
+      horizEdge += Math.abs(gray[py * sw + px + 1] - gray[py * sw + px - 1]);
+      heN++;
     }
   }
+  const textish = heN > 0 ? horizEdge / heN : 0;
+  if (textish > 28) return 0;
 
-  if (validPoints === 0) return 0;
-  const avgBorderDiff = borderDiffSum / validPoints;
-
-  // 背景から明確に浮き出ている（色の差が25以上ある）こと
-  if (avgBorderDiff < 25) return 0;
-
-  return Math.min(100, Math.round((variance / 15) + (avgBorderDiff * 1.8)));
+  return Math.min(100, Math.round(ring * 1.4 + sat * 40 + Math.min(30, variance / 40)));
 }

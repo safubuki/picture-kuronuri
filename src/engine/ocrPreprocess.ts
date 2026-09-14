@@ -20,7 +20,7 @@ export interface OcrPreprocessResult {
 }
 
 const ANALYSIS_WIDTH = 480;
-const TARGET_LINE_HEIGHT = 32;
+const TARGET_LINE_HEIGHT = 36;
 const MIN_SCALE = 0.55;
 const MAX_SCALE = 3.2;
 const MAX_WORK_SIDE = 2200;

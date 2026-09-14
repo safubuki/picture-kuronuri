@@ -325,16 +325,16 @@ function mergeFragmentedLines(lines: OcrLine[]): OcrLine[] {
         const other = sorted[j];
         const h1 = Math.max(1, acc.bbox.y1 - acc.bbox.y0);
         const h2 = Math.max(1, other.bbox.y1 - other.bbox.y0);
-        if (yOverlapRatio(acc.bbox, other.bbox) < 0.55) continue;
-        if (Math.abs(h1 - h2) / Math.max(h1, h2) > 0.45) continue;
+        if (yOverlapRatio(acc.bbox, other.bbox) < 0.68) continue;
+        if (Math.abs(h1 - h2) / Math.max(h1, h2) > 0.35) continue;
 
         const gap =
           acc.bbox.x0 <= other.bbox.x0
             ? other.bbox.x0 - acc.bbox.x1
             : acc.bbox.x0 - other.bbox.x1;
         const maxH = Math.max(h1, h2);
-        if (gap > maxH * 1.8) continue;
-        if (gap < -maxH * 0.4) continue;
+        if (gap > maxH * 1.15) continue;
+        if (gap < -maxH * 0.25) continue;
 
         const left = acc.bbox.x0 <= other.bbox.x0 ? acc : other;
         const right = left === acc ? other : acc;
