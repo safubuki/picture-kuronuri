@@ -79,7 +79,7 @@ export async function analyzeImageForRedaction(
           type: item.type,
           label: item.label,
           reason: item.type === "face" ? "顔写真の保護" : "チャットアバターの保護",
-          rect: applyPadding(item.rect, options.padding, imageElement.width, imageElement.height),
+          rect: applyPadding(item.rect, options.padding, imageElement.width, imageElement.height, false),
           enabled: true,
           confidence: item.confidence
         });
@@ -98,9 +98,14 @@ export async function analyzeImageForRedaction(
       ocrResult = await runOcr(imageElement, onProgress);
     } catch (err) {
       console.warn("OCR failed or offline fallback:", err);
-      ocrResult = { fullText: "", lines: [], symbols: [] };
+      ocrResult = { fullText: "", lines: [], symbols: [], scale: 1 };
     }
   }
+
+  const isScreenPhoto = ocrResult.analysis?.isLikelyScreenPhoto === true;
+  const smallText =
+    (ocrResult.analysis?.estimatedLineHeight || 99) > 0 &&
+    (ocrResult.analysis?.estimatedLineHeight || 99) < 18;
 
   onProgress?.({ status: "ルールベース個人情報解析中...", progress: 0.9 });
 
@@ -119,7 +124,7 @@ export async function analyzeImageForRedaction(
           label: "送信者名",
           text: lineText.trim(),
           reason: "チャット送信者名の推定",
-          rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height),
+          rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
           enabled: true
         });
       }
@@ -137,7 +142,7 @@ export async function analyzeImageForRedaction(
             label: "人名",
             text: p.matchedText,
             reason: getPersonReasonText(p.reason),
-            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height),
+            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
             enabled: true
           });
         }
@@ -156,7 +161,7 @@ export async function analyzeImageForRedaction(
             label: "会社名・組織",
             text: c.matchedText,
             reason: "法人格または企業名パターン",
-            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height),
+            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
             enabled: true
           });
         }
@@ -175,7 +180,7 @@ export async function analyzeImageForRedaction(
             label: p.label,
             text: p.matchedText,
             reason: `特定個人情報 (${p.label})`,
-            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height),
+            rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
             enabled: true
           });
         }
@@ -198,7 +203,7 @@ export async function analyzeImageForRedaction(
               label: "カスタム単語",
               text: kw,
               reason: `指定キーワード: "${kw}"`,
-              rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height),
+              rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
               enabled: true
             });
           }
@@ -217,8 +222,8 @@ export async function analyzeImageForRedaction(
     }
   }
 
-  // 重複矩形の整理（同じ領域に対する完全重複を排除）
-  const uniqueBoxes = removeDuplicateBoxes(boxes);
+  // 重複矩形の整理（同じ領域に対する完全重複・包含を排除）
+  const uniqueBoxes = mergeAdjacentBoxes(removeDuplicateBoxes(boxes));
 
   onProgress?.({ status: "解析完了", progress: 1.0 });
 
@@ -231,6 +236,37 @@ export async function analyzeImageForRedaction(
 /**
  * 行内の文字インデックス範囲 [startIndex, endIndex) に対応する矩形座標を計算する
  */
+function bboxFromSymbols(
+  symbols: { bbox: { x0: number; y0: number; x1: number; y1: number } }[],
+  startIndex: number,
+  endIndex: number
+): { x: number; y: number; width: number; height: number } | null {
+  if (!symbols || symbols.length === 0) return null;
+  const symStart = Math.min(Math.max(0, startIndex), symbols.length - 1);
+  const symEnd = Math.min(Math.max(symStart, endIndex - 1), symbols.length - 1);
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (let i = symStart; i <= symEnd; i++) {
+    const b = symbols[i].bbox;
+    minX = Math.min(minX, b.x0);
+    minY = Math.min(minY, b.y0);
+    maxX = Math.max(maxX, b.x1);
+    maxY = Math.max(maxY, b.y1);
+  }
+
+  if (minX === Infinity || maxX <= minX) return null;
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: Math.max(1, maxY - minY)
+  };
+}
+
 function calculateBBoxForRange(
   line: OcrLine,
   startIndex: number,
@@ -239,45 +275,39 @@ function calculateBBoxForRange(
   const textLen = line.text.length;
   if (startIndex < 0 || endIndex > textLen || startIndex >= endIndex) return null;
 
-  // symbols（文字単位情報）がある場合はそれを利用
+  // 正規化後テキストと 1:1 の alignedSymbols を最優先
+  if (line.alignedSymbols && line.alignedSymbols.length > 0) {
+    const aligned = bboxFromSymbols(line.alignedSymbols, startIndex, endIndex);
+    if (aligned) return aligned;
+  }
+
   if (line.symbols && line.symbols.length > 0) {
-    // line.symbols の長さと line.text の長さが一致しない場合があるため、比率またはインデックスでクランプ
-    const symStart = Math.min(startIndex, line.symbols.length - 1);
-    const symEnd = Math.min(endIndex - 1, line.symbols.length - 1);
+    const fromSym = bboxFromSymbols(line.symbols, startIndex, endIndex);
+    if (fromSym) return fromSym;
+  }
 
-    if (symStart <= symEnd && symStart >= 0) {
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-
-      for (let i = symStart; i <= symEnd; i++) {
-        const b = line.symbols[i].bbox;
-        minX = Math.min(minX, b.x0);
-        minY = Math.min(minY, b.y0);
-        maxX = Math.max(maxX, b.x1);
-        maxY = Math.max(maxY, b.y1);
-      }
-
-      if (minX !== Infinity && maxX > minX) {
-        return {
-          x: minX,
-          y: minY,
-          width: maxX - minX,
-          height: maxY - minY
-        };
-      }
+  // 単語列から比率推定
+  if (line.words && line.words.length > 0) {
+    const joined = line.words.map((w) => w.text).join("");
+    if (joined.length > 0) {
+      const ratioStart = startIndex / textLen;
+      const ratioEnd = endIndex / textLen;
+      const from = Math.floor(ratioStart * line.words.length);
+      const to = Math.min(line.words.length - 1, Math.max(from, Math.ceil(ratioEnd * line.words.length) - 1));
+      const fromWord = bboxFromSymbols(
+        line.words.map((w) => ({ bbox: w.bbox })),
+        from,
+        to + 1
+      );
+      if (fromWord) return fromWord;
     }
   }
 
-  // symbolsがない場合は行全体の幅から比率で推定
   const lineBox = line.bbox;
   const totalW = lineBox.x1 - lineBox.x0;
   const totalH = lineBox.y1 - lineBox.y0;
-
   const startRatio = startIndex / textLen;
   const endRatio = endIndex / textLen;
-
   const x = Math.round(lineBox.x0 + totalW * startRatio);
   const width = Math.max(10, Math.round(totalW * (endRatio - startRatio)));
 
@@ -296,12 +326,23 @@ function applyPadding(
   rect: { x: number; y: number; width: number; height: number },
   padding: number,
   maxWidth: number,
-  maxHeight: number
+  maxHeight: number,
+  expandForPhoto: boolean = false
 ): { x: number; y: number; width: number; height: number } {
-  const x = Math.max(0, rect.x - padding);
-  const y = Math.max(0, rect.y - padding);
-  const right = Math.min(maxWidth, rect.x + rect.width + padding);
-  const bottom = Math.min(maxHeight, rect.y + rect.height + padding);
+  let padX = padding;
+  let padY = padding;
+  if (expandForPhoto) {
+    padY = Math.max(padding + 2, Math.round(rect.height * 0.2));
+    padX = Math.max(padding + 1, Math.round(rect.width * 0.07));
+  } else if (rect.height > 0 && rect.height < 16) {
+    padY = Math.max(padding + 1, Math.round(rect.height * 0.16));
+    padX = Math.max(padding, Math.round(rect.width * 0.05));
+  }
+
+  const x = Math.max(0, rect.x - padX);
+  const y = Math.max(0, rect.y - padY);
+  const right = Math.min(maxWidth, rect.x + rect.width + padX);
+  const bottom = Math.min(maxHeight, rect.y + rect.height + padY);
 
   return {
     x,
@@ -329,23 +370,107 @@ function getPersonReasonText(reason: string): string {
 /**
  * ほぼ完全に同一の領域を指す重複ボックスを統合・除去
  */
+function boxArea(r: { width: number; height: number }): number {
+  return Math.max(0, r.width) * Math.max(0, r.height);
+}
+
+function containsBox(
+  outer: { x: number; y: number; width: number; height: number },
+  inner: { x: number; y: number; width: number; height: number }
+): boolean {
+  return (
+    inner.x >= outer.x - 2 &&
+    inner.y >= outer.y - 2 &&
+    inner.x + inner.width <= outer.x + outer.width + 2 &&
+    inner.y + inner.height <= outer.y + outer.height + 2
+  );
+}
+
 function removeDuplicateBoxes(boxes: RedactBox[]): RedactBox[] {
   const result: RedactBox[] = [];
 
   for (const b of boxes) {
     const isDuplicate = result.some(r => {
+      if (r.type !== b.type) return false;
       const xDiff = Math.abs(r.rect.x - b.rect.x);
       const yDiff = Math.abs(r.rect.y - b.rect.y);
       const wDiff = Math.abs(r.rect.width - b.rect.width);
       const hDiff = Math.abs(r.rect.height - b.rect.height);
-      // 位置が5px以内で幅高さも近似している場合は同一とみなす
       return xDiff < 8 && yDiff < 8 && wDiff < 15 && hDiff < 15;
     });
+    if (isDuplicate) continue;
 
-    if (!isDuplicate) {
-      result.push(b);
+    const containedByLarger = result.some(r => {
+      if (r.type !== b.type) return false;
+      return containsBox(r.rect, b.rect) && boxArea(r.rect) >= boxArea(b.rect);
+    });
+    if (containedByLarger) continue;
+
+    for (let i = result.length - 1; i >= 0; i--) {
+      const r = result[i];
+      if (r.type === b.type && containsBox(b.rect, r.rect) && boxArea(b.rect) > boxArea(r.rect)) {
+        result.splice(i, 1);
+      }
     }
+
+    result.push(b);
   }
 
   return result;
+}
+
+/**
+ * 同一行で隣接する同種ボックスを結合（細切れ OCR 対策）
+ */
+function mergeAdjacentBoxes(boxes: RedactBox[]): RedactBox[] {
+  const mergeable = new Set<RedactBox["type"]>(["person", "company", "pii", "custom"]);
+  const out: RedactBox[] = [];
+  const used = new Uint8Array(boxes.length);
+
+  for (let i = 0; i < boxes.length; i++) {
+    if (used[i]) continue;
+    let acc = boxes[i];
+    if (!mergeable.has(acc.type) || acc.isManual) {
+      out.push(acc);
+      used[i] = 1;
+      continue;
+    }
+    used[i] = 1;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < boxes.length; j++) {
+        if (used[j]) continue;
+        const other = boxes[j];
+        if (other.type !== acc.type || other.isManual) continue;
+
+        const a = acc.rect;
+        const b = other.rect;
+        const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+        const minH = Math.min(a.height, b.height) || 1;
+        if (overlapY / minH < 0.5) continue;
+        if (Math.abs(a.height - b.height) / Math.max(a.height, b.height, 1) > 0.5) continue;
+
+        const gap = a.x <= b.x ? b.x - (a.x + a.width) : a.x - (b.x + b.width);
+        if (gap > Math.max(a.height, b.height) * 0.55) continue;
+        if (gap < -Math.max(a.height, b.height) * 0.3) continue;
+
+        acc = {
+          ...acc,
+          text: [acc.text, other.text].filter(Boolean).join(""),
+          rect: {
+            x: Math.min(a.x, b.x),
+            y: Math.min(a.y, b.y),
+            width: Math.max(a.x + a.width, b.x + b.width) - Math.min(a.x, b.x),
+            height: Math.max(a.y + a.height, b.y + b.height) - Math.min(a.y, b.y)
+          }
+        };
+        used[j] = 1;
+        changed = true;
+      }
+    }
+    out.push(acc);
+  }
+
+  return out;
 }

@@ -3,6 +3,8 @@
  * 余計な文脈や助詞を含めず、会社名・組織名そのもののみを抽出する
  */
 
+import { foldVisualJa } from "../ocrNormalize";
+
 function escapeRegex(str: string): string {
   return str.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
@@ -44,16 +46,17 @@ export interface CompanyMatch {
 export function detectCompaniesInText(text: string): CompanyMatch[] {
   if (!text) return [];
   const results: CompanyMatch[] = [];
+  const folded = foldVisualJa(text);
 
   // 1. 法人格プレフィックス型 (例: "株式会社テックラボの山田です" -> "株式会社テックラボ")
   for (const corp of CORPORATE_TYPES) {
-    const escaped = escapeRegex(corp);
+    const escaped = escapeRegex(foldVisualJa(corp));
     // 「株式会社」に続く社名部分（漢字・カタカナ・アルファベット・数字・中黒・ハイフン）
     // ひらがなは助詞にぶつかるまでか、カタカナ・漢字のみ
     const prefixRegex = new RegExp(`${escaped}\\s*([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20}|[\\p{Script=Hiragana}\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20})`, "gu");
     
     let match: RegExpExecArray | null;
-    while ((match = prefixRegex.exec(text)) !== null) {
+    while ((match = prefixRegex.exec(folded)) !== null) {
       const matchIndex = match.index;
       const namePart = match[1];
 
@@ -68,19 +71,21 @@ export function detectCompaniesInText(text: string): CompanyMatch[] {
       }
 
       if (cleanNamePart.length > 0) {
-        const finalCorpName = corp + cleanNamePart;
-        results.push({
-          matchedText: finalCorpName,
-          startIndex: matchIndex,
-          endIndex: matchIndex + finalCorpName.length,
-          reason: "corporate_prefix"
-        });
+        const finalCorpName = text.slice(matchIndex, matchIndex + corp.length + cleanNamePart.length);
+        if (finalCorpName.length > corp.length) {
+          results.push({
+            matchedText: finalCorpName,
+            startIndex: matchIndex,
+            endIndex: matchIndex + finalCorpName.length,
+            reason: "corporate_prefix"
+          });
+        }
       }
     }
 
     // 2. 法人格サフィックス型 (例: "トヨタ自動車株式会社", "Google LLC")
     const suffixRegex = new RegExp(`([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー・-]{1,20})\\s*${escaped}`, "gu");
-    while ((match = suffixRegex.exec(text)) !== null) {
+    while ((match = suffixRegex.exec(folded)) !== null) {
       const matchIndex = match.index;
       const rawBefore = match[1];
 
@@ -96,10 +101,10 @@ export function detectCompaniesInText(text: string): CompanyMatch[] {
       }
 
       if (cleanBefore.length > 0) {
-        const finalCorpName = cleanBefore + corp;
         const actualStart = matchIndex + offset;
+        const finalCorpName = text.slice(actualStart, actualStart + cleanBefore.length + corp.length);
         const isCovered = results.some(r => actualStart >= r.startIndex && (actualStart + finalCorpName.length) <= r.endIndex);
-        if (!isCovered) {
+        if (!isCovered && finalCorpName.length > corp.length) {
           results.push({
             matchedText: finalCorpName,
             startIndex: actualStart,
@@ -115,8 +120,8 @@ export function detectCompaniesInText(text: string): CompanyMatch[] {
   const suffixPattern = ORG_SUFFIXES.map(escapeRegex).join("|");
   const orgRegex = new RegExp(`([\\p{Script=Han}\\p{Script=Katakana}a-zA-Z0-9_ー]{2,15})(?:${suffixPattern})`, "gu");
   let orgMatch: RegExpExecArray | null;
-  while ((orgMatch = orgRegex.exec(text)) !== null) {
-    const full = orgMatch[0];
+  while ((orgMatch = orgRegex.exec(folded)) !== null) {
+    const full = text.slice(orgMatch.index, orgMatch.index + orgMatch[0].length);
     const startIndex = orgMatch.index;
     const isCovered = results.some(r => startIndex >= r.startIndex && (startIndex + full.length) <= r.endIndex);
     if (!isCovered) {

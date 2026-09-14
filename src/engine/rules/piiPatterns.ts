@@ -27,12 +27,17 @@ export function detectPiiInText(text: string): PiiMatch[] {
   if (!text) return [];
   const results: PiiMatch[] = [];
 
-  // 1. 電話番号・携帯番号 (例: 090-1234-5678, 03-1234-5678, 0120-12-3456)
-  const phoneRegex = /\b(?:0\d{1,4}[-ー]\d{1,4}[-ー]\d{4}|0[789]0\d{8}|0\d{9,10})\b/g;
+  // 1. 電話番号・携帯番号
+  // 撮影OCRで入りがちな O/0 混同、中点・空白・各種ダッシュも許容
+  const phoneRegex =
+    /(?:0|O|o|〇)[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{1,4}[-ー−–‐・･.\s]{1,3}[\dOo]{3,5}|(?:0[789]0\d{8}|0\d{9,10})\b/g;
   let match: RegExpExecArray | null;
   while ((match = phoneRegex.exec(text)) !== null) {
+    const raw = match[0].trim();
+    const digits = raw.replace(/[OoｏＯ〇○]/g, "0").replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 11) continue;
     results.push({
-      matchedText: match[0],
+      matchedText: raw,
       startIndex: match.index,
       endIndex: match.index + match[0].length,
       category: "phone",
@@ -40,11 +45,11 @@ export function detectPiiInText(text: string): PiiMatch[] {
     });
   }
 
-  // 2. メールアドレス (例: user.name@example.com)
-  const emailRegex = /\b[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b/g;
+  // 2. メールアドレス（@ 前後の空白・全角化済みの半角を許容）
+  const emailRegex = /\b[a-zA-Z0-9_.+-]+\s*@\s*[a-zA-Z0-9-]+\s*\.\s*[a-zA-Z0-9-.]+\b/g;
   while ((match = emailRegex.exec(text)) !== null) {
     results.push({
-      matchedText: match[0],
+      matchedText: match[0].replace(/\s+/g, ""),
       startIndex: match.index,
       endIndex: match.index + match[0].length,
       category: "email",
@@ -53,7 +58,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
   }
 
   // 3. 郵便番号 (〒マークまたは郵便番号表記のみ。電話番号と重ならないもの)
-  const postalRegex = /(?:〒\s*)\d{3}[-ー]\d{4}\b/g;
+  const postalRegex = /(?:〒\s*)\d{3}[-ー−–‐]\d{4}\b/g;
   while ((match = postalRegex.exec(text)) !== null) {
     const isCovered = results.some(r => match!.index >= r.startIndex && match!.index < r.endIndex);
     if (!isCovered) {

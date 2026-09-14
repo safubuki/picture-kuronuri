@@ -69,7 +69,7 @@ export function detectPersonsInText(text: string): PersonMatch[] {
 
   // 2. フルネームパターン (例: "山田 太郎", "鈴木 一郎", "山田太郎")
   // 名字辞書にマッチする名字 + (空白任意) + 1〜3文字の名前
-  const fullNameRegex = /([\p{Script=Han}]{1,4})(?:[\s　]+)?([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
+  const fullNameRegex = /([\p{Script=Han}\p{Script=Katakana}]{1,4})(?:[\s　]+)?([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3})/gu;
   while ((match = fullNameRegex.exec(text)) !== null) {
     const candidateSurname = match[1];
     const candidateGiven = match[2];
@@ -163,6 +163,18 @@ export function isLikelyChatSender(text: string): boolean {
 
   // フルネーム（スペース区切り: 例「山田 太郎」）
   if (/^[\p{Script=Han}]{1,4}[\s　]+[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,4}$/u.test(t)) {
+    return true;
+  }
+
+  // スペースなしフルネーム（OCRが空白を潰した場合: 「山田太郎」）
+  const compactSurname = matchSurname(t);
+  if (
+    compactSurname &&
+    compactSurname.length >= 2 &&
+    t.length > compactSurname.length &&
+    t.length - compactSurname.length <= 3 &&
+    /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,3}$/u.test(t.slice(compactSurname.length))
+  ) {
     return true;
   }
 

@@ -4,6 +4,8 @@
  * 外部通信なしで完全ローカル・O(1)で判定可能。
  */
 
+import { foldVisualJa } from "../ocrNormalize";
+
 export const TOP_SURNAMES: readonly string[] = [
   // 上位100
   "佐藤", "鈴木", "高橋", "田中", "渡辺", "伊藤", "山本", "中村", "小林", "加藤",
@@ -93,8 +95,17 @@ export const TOP_SURNAMES: readonly string[] = [
 // 高速ルックアップ用のSet
 export const SURNAME_SET = new Set(TOP_SURNAMES);
 
+const FOLDED_SURNAME_SET: Set<string> = (() => {
+  const s = new Set<string>();
+  for (const name of TOP_SURNAMES) {
+    s.add(foldVisualJa(name));
+  }
+  return s;
+})();
+
 /**
  * 文字列が一般的な名字で始まっているかを判定し、その名字文字列を返す
+ * 低解像度OCRの字形取り違え（口/ロ 等）は 2 文字以上の名字のみ折りたたみ一致を許可
  */
 export function matchSurname(text: string): string | null {
   if (!text || text.length < 1) return null;
@@ -102,6 +113,9 @@ export function matchSurname(text: string): string | null {
   for (let len = Math.min(text.length, 4); len >= 1; len--) {
     const candidate = text.slice(0, len);
     if (SURNAME_SET.has(candidate)) {
+      return candidate;
+    }
+    if (len >= 2 && FOLDED_SURNAME_SET.has(foldVisualJa(candidate))) {
       return candidate;
     }
   }

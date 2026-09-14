@@ -17,7 +17,7 @@ export function generateChatSampleImage(): SampleChatResult {
   canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    return { dataUrl: "", ocrData: { fullText: "", lines: [], symbols: [] }, avatars: [] };
+    return { dataUrl: "", ocrData: { fullText: "", lines: [], symbols: [], scale: 1 }, avatars: [] };
   }
 
   const lines: OcrLine[] = [];
@@ -57,6 +57,7 @@ export function generateChatSampleImage(): SampleChatResult {
 
     lines.push({
       text,
+      rawText: text,
       bbox: {
         x0: x,
         y0: y,
@@ -68,7 +69,9 @@ export function generateChatSampleImage(): SampleChatResult {
         bbox: { x0: x, y0: y, x1: Math.round(currentX), y1: y + lineHeight },
         confidence: 99
       }],
-      symbols: lineSymbols
+      symbols: lineSymbols,
+      alignedSymbols: lineSymbols,
+      confidence: 99
     });
   };
 
@@ -168,7 +171,8 @@ export function generateChatSampleImage(): SampleChatResult {
     ocrData: {
       fullText,
       lines,
-      symbols: allSymbols
+      symbols: allSymbols,
+      scale: 1
     },
     avatars
   };

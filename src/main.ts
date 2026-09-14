@@ -240,7 +240,8 @@ async function startAnalysis(): Promise<void> {
 
     appState.setBoxes(result.boxes);
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
-    showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}`);
+    const photoNotice = result.ocrResult.analysis?.isLikelyScreenPhoto ? " / 画面撮影向け前処理" : "";
+    showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${photoNotice}`);
   } catch (err) {
     console.error("Analysis failed:", err);
     showToast("画像解析中にエラーが発生しました");
@@ -712,7 +713,7 @@ function initEvents(): void {
   btnAutoEnhance.addEventListener("click", async () => {
     const state = appState.getState();
     if (!state.sourceImage) return;
-    showToast("コントラスト・影除去補正を実行中...");
+    showToast("モアレ低減・コントラスト強調を実行中...");
     const enhanced = await enhanceImageForOcr(state.sourceImage);
     appState.setSourceImage(enhanced);
     startAnalysis();

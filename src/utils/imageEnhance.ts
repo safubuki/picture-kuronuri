@@ -3,6 +3,8 @@
  * 外部通信を行わず、Canvas API のみで高速に画像変換・補正を実行
  */
 
+import { enhanceColorImage } from "../engine/ocrPreprocess";
+
 /**
  * 画像を任意の角度（度数法）で回転・傾き補正する
  */
@@ -45,38 +47,12 @@ export async function rotateImage90(
 }
 
 /**
- * コントラスト・明度強調および影の低減（OCR認識精度を向上）
+ * コントラスト・影・モアレを古典的画像処理で抑え、文字を読みやすくする（表示用）
  */
 export async function enhanceImageForOcr(
-  source: HTMLImageElement | HTMLCanvasElement,
-  contrastFactor: number = 1.3,
-  brightnessOffset: number = 10
+  source: HTMLImageElement | HTMLCanvasElement
 ): Promise<HTMLImageElement> {
-  const w = (source as HTMLImageElement).naturalWidth || source.width;
-  const h = (source as HTMLImageElement).naturalHeight || source.height;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas context creation failed");
-
-  ctx.drawImage(source, 0, 0);
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const data = imgData.data;
-
-  // コントラスト変換テーブルの作成
-  for (let i = 0; i < data.length; i += 4) {
-    // RGBの各チャンネルにコントラスト・明度適用
-    for (let c = 0; c < 3; c++) {
-      let val = data[i + c];
-      // 128を中心にコントラスト拡大
-      val = Math.round((val - 128) * contrastFactor + 128 + brightnessOffset);
-      data[i + c] = Math.max(0, Math.min(255, val));
-    }
-  }
-
-  ctx.putImageData(imgData, 0, 0);
+  const canvas = enhanceColorImage(source);
   return loadImageFromDataUrl(canvas.toDataURL("image/png"));
 }
 

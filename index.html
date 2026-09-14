@@ -225,7 +225,7 @@
             <span class="panel-badge">歪み・傾き</span>
           </div>
           <div style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-            斜め撮影の台形歪み・傾き・向き・影を数学的画像処理で整え、解析精度を最大化します。
+            斜め撮影の台形歪み・傾きに加え、画面のカメラ撮影で起きるジャギー・モアレ・小さい文字は、解析時に自動で前処理します（AI不使用）。
           </div>
 
           <!-- One-touch Auto Flatten Pipeline -->
@@ -248,7 +248,7 @@
             <button id="btnRotateRight" class="btn btn-secondary btn-sm" style="flex: 1;" title="時計回りに90°回転">
               ↻ 90°
             </button>
-            <button id="btnAutoEnhance" class="btn btn-secondary btn-sm" style="flex: 1.2;" title="文字をくっきり強調・影除去">
+            <button id="btnAutoEnhance" class="btn btn-secondary btn-sm" style="flex: 1.2;" title="モアレ低減・局所コントラスト・文字強調（表示用）">
               ✨ 影除去・強調
             </button>
           </div>
