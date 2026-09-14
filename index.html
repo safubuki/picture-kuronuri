@@ -98,6 +98,9 @@
             </span>
           </div>
           <div class="perspective-buttons">
+            <button id="btnResetCornersFull" class="btn btn-secondary btn-sm" title="四隅ピンを画像の外枠いっぱいに広げて本文の削れを防止します">
+              ⏹️ 全画面に広げる
+            </button>
             <button id="btnAutoDetectCorners" class="btn btn-secondary btn-sm" title="AIを使わずにエッジ解析で四隅を自動検出">
               🔍 四隅を再検出
             </button>
@@ -426,18 +429,9 @@
         <div class="camera-viewfinder-container">
           <video id="cameraVideo" class="camera-video" autoplay playsinline muted></video>
           
-          <!-- Realtime Alignment Guides (Reticle / Frame) -->
           <div class="camera-guide-overlay">
-            <div class="guide-frame">
-              <div class="guide-corner guide-tl"></div>
-              <div class="guide-corner guide-tr"></div>
-              <div class="guide-corner guide-br"></div>
-              <div class="guide-corner guide-bl"></div>
-              <div class="guide-crosshair horizontal"></div>
-              <div class="guide-crosshair vertical"></div>
-            </div>
             <div class="guide-instruction-pill">
-              <span>📐 モニターや画面を四隅の枠に合わせて撮影してください</span>
+              <span>📷 ディスプレイや画面全体が写るように撮影してください</span>
             </div>
           </div>
         </div>

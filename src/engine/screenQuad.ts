@@ -18,11 +18,14 @@ function dist(a: Point2D, b: Point2D): number {
 }
 
 export function defaultQuadCorners(w: number, h: number): QuadCorners {
+  // 本文やヘッダーが切り落とされないよう、初期ピンは画像外枠（マージン1.5%）いっぱいに配置
+  const padX = Math.max(1, Math.round(w * 0.015));
+  const padY = Math.max(1, Math.round(h * 0.015));
   return {
-    topLeft: { x: Math.round(w * 0.04), y: Math.round(h * 0.04) },
-    topRight: { x: Math.round(w * 0.96), y: Math.round(h * 0.04) },
-    bottomRight: { x: Math.round(w * 0.96), y: Math.round(h * 0.96) },
-    bottomLeft: { x: Math.round(w * 0.04), y: Math.round(h * 0.96) }
+    topLeft: { x: padX, y: padY },
+    topRight: { x: w - padX, y: padY },
+    bottomRight: { x: w - padX, y: h - padY },
+    bottomLeft: { x: padX, y: h - padY }
   };
 }
 
@@ -780,25 +783,49 @@ export function detectDocumentCornersDetailed(
 
   const found = detectScreenQuadOnGray(gray, w, h);
   const inv = 1 / scale;
-  return {
-    corners: {
-      topLeft: {
-        x: Math.round(found.corners.topLeft.x * inv),
-        y: Math.round(found.corners.topLeft.y * inv)
-      },
-      topRight: {
-        x: Math.round(found.corners.topRight.x * inv),
-        y: Math.round(found.corners.topRight.y * inv)
-      },
-      bottomRight: {
-        x: Math.round(found.corners.bottomRight.x * inv),
-        y: Math.round(found.corners.bottomRight.y * inv)
-      },
-      bottomLeft: {
-        x: Math.round(found.corners.bottomLeft.x * inv),
-        y: Math.round(found.corners.bottomLeft.y * inv)
-      }
+
+  const tl = { x: Math.round(found.corners.topLeft.x * inv), y: Math.round(found.corners.topLeft.y * inv) };
+  const tr = { x: Math.round(found.corners.topRight.x * inv), y: Math.round(found.corners.topRight.y * inv) };
+  const br = { x: Math.round(found.corners.bottomRight.x * inv), y: Math.round(found.corners.bottomRight.y * inv) };
+  const bl = { x: Math.round(found.corners.bottomLeft.x * inv), y: Math.round(found.corners.bottomLeft.y * inv) };
+
+  const candidateCorners: QuadCorners = { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl };
+  const area = quadArea(candidateCorners);
+  const totalArea = origW * origH;
+  const areaRatio = area / totalArea;
+
+  // 1. "content" (本文文字群のバウンディングボックス) の場合はヘッダーや下部が切り落とされるため、
+  //    台形歪みのない正面ショットなら全体枠、台形歪みがあるなら外側に拡張
+  if (found.method === "content" || areaRatio < 0.72) {
+    // 面積が小さすぎる（画面内の吹き出し等を誤検出している）場合は、本文削れ防止のため全体枠を初期値にする
+    return fallback;
+  }
+
+  // 2. ピンが上端や下端の本文に食い込まないよう、端から近ければ安全に画像端まで外側展開
+  const padX = Math.round(origW * 0.015);
+  const padY = Math.round(origH * 0.015);
+
+  const safeCorners: QuadCorners = {
+    topLeft: {
+      x: tl.x < origW * 0.12 ? padX : tl.x,
+      y: tl.y < origH * 0.12 ? padY : tl.y
     },
+    topRight: {
+      x: tr.x > origW * 0.88 ? origW - padX : tr.x,
+      y: tr.y < origH * 0.12 ? padY : tr.y
+    },
+    bottomRight: {
+      x: br.x > origW * 0.88 ? origW - padX : br.x,
+      y: br.y > origH * 0.88 ? origH - padY : br.y
+    },
+    bottomLeft: {
+      x: bl.x < origW * 0.12 ? padX : bl.x,
+      y: bl.y > origH * 0.88 ? origH - padY : bl.y
+    }
+  };
+
+  return {
+    corners: safeCorners,
     confidence: found.confidence,
     method: found.method
   };

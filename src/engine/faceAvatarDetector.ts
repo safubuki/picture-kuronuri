@@ -156,12 +156,12 @@ function detectChatAvatarsStrict(
   const candidates: Candidate[] = [];
 
   for (const avatarSize of sizes) {
-    const stepY = Math.max(8, Math.round(avatarSize * 0.25));
+    const stepY = Math.max(10, Math.round(avatarSize * 0.3));
     for (const fixedX of xs) {
       if (fixedX + avatarSize >= sw) continue;
       for (let y = startY; y < endY - avatarSize; y += stepY) {
         const score = evaluateStrictAvatar(gray, data, sw, sh, fixedX, y, avatarSize);
-        if (score >= 50) {
+        if (score >= 68) {
           candidates.push({
             origX: Math.round(fixedX / scale),
             origY: Math.round(y / scale),
@@ -180,8 +180,9 @@ function detectChatAvatarsStrict(
     const rect = { x: c.origX, y: c.origY, width: c.origSize, height: c.origSize };
     const isDup = avatars.some((a) => {
       if (isOverlap(a.rect, rect, 0.2)) return true;
-      const sameCol = Math.abs(a.rect.x - rect.x) < rect.width * 0.6;
-      const closeY = Math.abs(a.rect.y - rect.y) < rect.height * 0.55;
+      const sameCol = Math.abs(a.rect.x - rect.x) < rect.width * 0.8;
+      // チャットメッセージは縦に十分な間隔があるため、同一列のアバター同士は最低でも縦に1.8倍以上離れている必要がある
+      const closeY = Math.abs(a.rect.y - rect.y) < Math.max(rect.height * 1.8, Math.round(height * 0.10));
       return sameCol && closeY;
     });
     if (!isDup) {
@@ -193,8 +194,8 @@ function detectChatAvatarsStrict(
         label: "チャットアイコン"
       });
     }
-    // 1画面のアバター数は最大でも6個程度
-    if (avatars.length >= 6) break;
+    // 1画面のアバター数は最大でも5個程度
+    if (avatars.length >= 5) break;
   }
 
   return avatars;
@@ -257,23 +258,40 @@ function evaluateStrictAvatar(
   let dirMatches = 0;
   let totalEdge = 0;
 
+  // 4象限（上・下・左・右）それぞれでエッジが存在するかフラグ
+  let hasTopEdge = false;
+  let hasBottomEdge = false;
+  let hasLeftEdge = false;
+  let hasRightEdge = false;
+
   for (let a = 0; a < 8; a++) {
     const rad = (a / 8) * Math.PI * 2;
-    const xOut = Math.round(cx + Math.cos(rad) * r1);
-    const yOut = Math.round(cy + Math.sin(rad) * r1);
-    const xIn = Math.round(cx + Math.cos(rad) * r0);
-    const yIn = Math.round(cy + Math.sin(rad) * r0);
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    const xOut = Math.round(cx + cosA * r1);
+    const yOut = Math.round(cy + sinA * r1);
+    const xIn = Math.round(cx + cosA * r0);
+    const yIn = Math.round(cy + sinA * r0);
     if (xOut < 0 || yOut < 0 || xOut >= sw || yOut >= sh) continue;
     if (xIn < 0 || yIn < 0 || xIn >= sw || yIn >= sh) continue;
     const diff = Math.abs(gray[yOut * sw + xOut] - gray[yIn * sw + xIn]);
     totalEdge += diff;
-    if (diff >= 14) dirMatches++;
+    if (diff >= 14) {
+      dirMatches++;
+      if (sinA < -0.3) hasTopEdge = true;
+      if (sinA > 0.3) hasBottomEdge = true;
+      if (cosA < -0.3) hasLeftEdge = true;
+      if (cosA > 0.3) hasRightEdge = true;
+    }
   }
 
-  // 8方向中少なくとも5方向でエッジが存在すること（単なる水平線やテキスト行なら2〜3方向しかない）
-  if (dirMatches < 5) return 0;
+  // 吹き出しの縦境界線（左右しかエッジがない）や横罫線を除外するため、上・下・左・右すべてにエッジがあることを必須化
+  if (!hasTopEdge || !hasBottomEdge || !hasLeftEdge || !hasRightEdge) return 0;
+
+  // 8方向中少なくとも6方向でエッジが存在すること
+  if (dirMatches < 6) return 0;
   const avgRing = totalEdge / 8;
-  if (avgRing < 16) return 0;
+  if (avgRing < 18) return 0;
 
   // チャットアイコンの右側（吹き出し領域）の存在確認
   const rightX0 = Math.min(sw - 1, x + size + 2);

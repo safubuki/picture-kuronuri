@@ -11,6 +11,7 @@ import {
   type QuadCorners,
   type Point2D
 } from "./engine/autoDeskew";
+import { defaultQuadCorners } from "./engine/screenQuad";
 import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine/capturePipeline";
 import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
 
@@ -22,6 +23,7 @@ const progressOverlay = document.getElementById("progressOverlay") as HTMLDivEle
 const progressStatus = document.getElementById("progressStatus") as HTMLHeadingElement;
 const progressBar = document.getElementById("progressBar") as HTMLDivElement;
 const perspectiveBar = document.getElementById("perspectiveBar") as HTMLDivElement;
+const btnResetCornersFull = document.getElementById("btnResetCornersFull") as HTMLButtonElement;
 const btnAutoDetectCorners = document.getElementById("btnAutoDetectCorners") as HTMLButtonElement;
 const btnApplyPerspective = document.getElementById("btnApplyPerspective") as HTMLButtonElement;
 const btnCancelPerspective = document.getElementById("btnCancelPerspective") as HTMLButtonElement;
@@ -725,7 +727,29 @@ function getCanvasCoordinates(e: MouseEvent | Touch): { x: number; y: number } {
 }
 
 /**
- * ライブカメラモーダルを開く（画面撮影アシストガイド枠付き）
+ * モバイル端末（スマートフォン・タブレット）判定
+ */
+function isMobileDevice(): boolean {
+  return (
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (typeof window !== "undefined" && "ontouchstart" in window && window.innerWidth <= 820)
+  );
+}
+
+/**
+ * カメラ撮影を開始（モバイルならOS標準カメラ、PCならWebカメラモーダル）
+ */
+function triggerCameraCapture(): void {
+  if (isMobileDevice()) {
+    // スマホでは解像度低下やアスペクト比の不一致を避け、OS標準の最高解像度カメラを直接起動
+    cameraInput.click();
+  } else {
+    void openLiveCameraModal();
+  }
+}
+
+/**
+ * ライブカメラモーダルを開く（PC向けWebカメラ）
  */
 async function openLiveCameraModal(): Promise<void> {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -815,8 +839,8 @@ function initEvents(): void {
   appState.subscribe(syncUiWithState);
 
   // ファイル選択・カメラ
-  btnTakePhoto.addEventListener("click", () => void openLiveCameraModal());
-  btnNewPhotoHeader.addEventListener("click", () => void openLiveCameraModal());
+  btnTakePhoto.addEventListener("click", triggerCameraCapture);
+  btnNewPhotoHeader.addEventListener("click", triggerCameraCapture);
   btnSelectFile.addEventListener("click", () => fileInput.click());
 
   // ライブカメラモーダル操作
@@ -990,6 +1014,16 @@ function initEvents(): void {
   if (btnToolbarPerspective) {
     btnToolbarPerspective.addEventListener("click", () => openPerspectiveMode());
   }
+
+  // 四隅ピンを画像全体枠（マージン1.5%）に広げて本文削れを防止
+  btnResetCornersFull.addEventListener("click", () => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+
+    perspectiveCorners = defaultQuadCorners(state.sourceImage.width, state.sourceImage.height);
+    updateCanvasRender();
+    showToast("四隅ピンを画像全体に広げました（本文削れを防止）");
+  });
 
   // 四隅の自動再検出
   btnAutoDetectCorners.addEventListener("click", () => {

@@ -394,17 +394,12 @@ function applyPadding(
   padding: number,
   maxWidth: number,
   maxHeight: number,
-  expandForPhoto: boolean = false
+  _expandForPhoto: boolean = false
 ): { x: number; y: number; width: number; height: number } {
-  let padX = padding;
-  let padY = padding;
-  if (expandForPhoto) {
-    padY = Math.max(padding + 2, Math.round(rect.height * 0.2));
-    padX = Math.max(padding + 1, Math.round(rect.width * 0.07));
-  } else if (rect.height > 0 && rect.height < 16) {
-    padY = Math.max(padding + 1, Math.round(rect.height * 0.16));
-    padX = Math.max(padding, Math.round(rect.width * 0.05));
-  }
+  // 黒塗りを細くスタイリッシュに保つため、上下は0〜1pxに厳格制限（行間を潰さず文字にフィット）
+  const padY = Math.min(1, Math.max(0, padding));
+  // 左右は文字末尾が見切れないよう適度に1〜2px
+  const padX = Math.min(2, Math.max(1, padding));
 
   const x = Math.max(0, rect.x - padX);
   const y = Math.max(0, rect.y - padY);
@@ -441,46 +436,64 @@ function boxArea(r: { width: number; height: number }): number {
   return Math.max(0, r.width) * Math.max(0, r.height);
 }
 
-function containsBox(
-  outer: { x: number; y: number; width: number; height: number },
-  inner: { x: number; y: number; width: number; height: number }
-): boolean {
-  return (
-    inner.x >= outer.x - 2 &&
-    inner.y >= outer.y - 2 &&
-    inner.x + inner.width <= outer.x + outer.width + 2 &&
-    inner.y + inner.height <= outer.y + outer.height + 2
-  );
+function getBoxPriority(type: RedactType): number {
+  switch (type) {
+    case "pii": return 100;
+    case "company": return 90;
+    case "person": return 80;
+    case "custom": return 70;
+    case "manual": return 60;
+    case "avatar": return 50;
+    case "face": return 40;
+    default: return 0;
+  }
 }
 
 function removeDuplicateBoxes(boxes: RedactBox[]): RedactBox[] {
+  // 優先度の高い順（PII > 会社名 > 人名 > アイコン）にソート
+  const sorted = [...boxes].sort((a, b) => getBoxPriority(b.type) - getBoxPriority(a.type));
   const result: RedactBox[] = [];
 
-  for (const b of boxes) {
-    const isDuplicate = result.some(r => {
-      if (r.type !== b.type) return false;
-      const xDiff = Math.abs(r.rect.x - b.rect.x);
-      const yDiff = Math.abs(r.rect.y - b.rect.y);
-      const wDiff = Math.abs(r.rect.width - b.rect.width);
-      const hDiff = Math.abs(r.rect.height - b.rect.height);
-      return xDiff < 8 && yDiff < 8 && wDiff < 15 && hDiff < 15;
-    });
-    if (isDuplicate) continue;
-
-    const containedByLarger = result.some(r => {
-      if (r.type !== b.type) return false;
-      return containsBox(r.rect, b.rect) && boxArea(r.rect) >= boxArea(b.rect);
-    });
-    if (containedByLarger) continue;
-
-    for (let i = result.length - 1; i >= 0; i--) {
+  for (const b of sorted) {
+    let merged = false;
+    for (let i = 0; i < result.length; i++) {
       const r = result[i];
-      if (r.type === b.type && containsBox(b.rect, r.rect) && boxArea(b.rect) > boxArea(r.rect)) {
-        result.splice(i, 1);
+      const xLeft = Math.max(r.rect.x, b.rect.x);
+      const yTop = Math.max(r.rect.y, b.rect.y);
+      const xRight = Math.min(r.rect.x + r.rect.width, b.rect.x + b.rect.width);
+      const yBottom = Math.min(r.rect.y + r.rect.height, b.rect.y + b.rect.height);
+
+      if (xRight > xLeft && yBottom > yTop) {
+        const overlapArea = (xRight - xLeft) * (yBottom - yTop);
+        const smallerArea = Math.min(boxArea(r.rect), boxArea(b.rect));
+        const overlapRatio = smallerArea > 0 ? overlapArea / smallerArea : 0;
+
+        // 35%以上重なっている場合は優先度の高い方に統合（多重ラベル・真っ黒ブロック化を防止）
+        if (overlapRatio >= 0.35) {
+          const unionX = Math.min(r.rect.x, b.rect.x);
+          const unionY = Math.min(r.rect.y, b.rect.y);
+          const unionR = Math.max(r.rect.x + r.rect.width, b.rect.x + b.rect.width);
+          const unionB = Math.max(r.rect.y + r.rect.height, b.rect.y + b.rect.height);
+
+          result[i] = {
+            ...r,
+            text: r.text || b.text,
+            rect: {
+              x: unionX,
+              y: unionY,
+              width: unionR - unionX,
+              height: unionB - unionY
+            }
+          };
+          merged = true;
+          break;
+        }
       }
     }
 
-    result.push(b);
+    if (!merged) {
+      result.push(b);
+    }
   }
 
   return result;
