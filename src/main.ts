@@ -30,6 +30,18 @@ const btnCancelPerspective = document.getElementById("btnCancelPerspective") as 
 const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
 const fileInput = document.getElementById("fileInput") as HTMLInputElement;
 
+// Live Camera Modal Elements
+const cameraModal = document.getElementById("cameraModal") as HTMLDivElement;
+const cameraBackdrop = document.getElementById("cameraBackdrop") as HTMLDivElement;
+const cameraVideo = document.getElementById("cameraVideo") as HTMLVideoElement;
+const btnCloseCameraModal = document.getElementById("btnCloseCameraModal") as HTMLButtonElement;
+const btnSwitchCamera = document.getElementById("btnSwitchCamera") as HTMLButtonElement;
+const btnShutter = document.getElementById("btnShutter") as HTMLButtonElement;
+const btnCameraFallbackFile = document.getElementById("btnCameraFallbackFile") as HTMLButtonElement;
+
+let activeCameraStream: MediaStream | null = null;
+let currentFacingMode: "environment" | "user" = "environment";
+
 // Camera Enhancement Buttons
 const btnAutoFlatten = document.getElementById("btnAutoFlatten") as HTMLButtonElement;
 const btnAutoDeskew = document.getElementById("btnAutoDeskew") as HTMLButtonElement;
@@ -51,6 +63,7 @@ const btnCompare = document.getElementById("btnCompare") as HTMLButtonElement;
 const btnUndo = document.getElementById("btnUndo") as HTMLButtonElement;
 const btnRedo = document.getElementById("btnRedo") as HTMLButtonElement;
 const btnReset = document.getElementById("btnReset") as HTMLButtonElement;
+const btnToolbarPerspective = document.getElementById("btnToolbarPerspective") as HTMLButtonElement;
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -116,7 +129,7 @@ function drawPerspectiveOverlay(ctx: CanvasRenderingContext2D, corners: QuadCorn
   ctx.lineTo(corners.bottomLeft.x, corners.bottomLeft.y);
   ctx.closePath();
   ctx.strokeStyle = "#38bdf8";
-  ctx.lineWidth = 3;
+  ctx.lineWidth = Math.max(3, Math.round(Math.min(ctx.canvas.width, ctx.canvas.height) * 0.005));
   ctx.setLineDash([8, 4]);
   ctx.stroke();
 
@@ -124,28 +137,126 @@ function drawPerspectiveOverlay(ctx: CanvasRenderingContext2D, corners: QuadCorn
   ctx.fillStyle = "rgba(56, 189, 248, 0.15)";
   ctx.fill();
 
+  const baseDim = Math.min(ctx.canvas.width, ctx.canvas.height);
+  const pinRadius = Math.max(16, Math.round(baseDim * 0.026));
+  const pinFontSize = Math.max(11, Math.round(pinRadius * 0.65));
+
   // 4隅のピン
-  const drawPin = (pt: Point2D, label: string) => {
+  const drawPin = (pt: Point2D, label: string, isCurrentActive: boolean) => {
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
-    ctx.fillStyle = "#0284c7";
+    ctx.arc(pt.x, pt.y, pinRadius, 0, Math.PI * 2);
+    ctx.fillStyle = isCurrentActive ? "#0284c7" : "#0ea5e9";
     ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = Math.max(2, Math.round(pinRadius * 0.2));
+    ctx.strokeStyle = isCurrentActive ? "#38bdf8" : "#ffffff";
     ctx.setLineDash([]);
     ctx.stroke();
 
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 11px sans-serif";
+    ctx.font = `bold ${pinFontSize}px sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, pt.x, pt.y);
   };
 
-  drawPin(corners.topLeft, "左上");
-  drawPin(corners.topRight, "右上");
-  drawPin(corners.bottomRight, "右下");
-  drawPin(corners.bottomLeft, "左下");
+  drawPin(corners.topLeft, "左上", activeCornerKey === "topLeft");
+  drawPin(corners.topRight, "右上", activeCornerKey === "topRight");
+  drawPin(corners.bottomRight, "右下", activeCornerKey === "bottomRight");
+  drawPin(corners.bottomLeft, "左下", activeCornerKey === "bottomLeft");
+
+  // ★ 虫眼鏡（Loupe / 拡大プレビュー）: ドラッグ中に指やカーソルで隠れずピクセル単位で微調整 ★
+  if (activeCornerKey && appState.getState().sourceImage) {
+    const sourceImg = appState.getState().sourceImage!;
+    const pt = corners[activeCornerKey];
+
+    const loupeRadius = Math.max(70, Math.round(baseDim * 0.14)); // 画面サイズに応じた虫眼鏡半径
+    const zoom = 2.6; // 拡大率
+
+    // 指やカーソルに隠れないよう、ピンの上部（画面上端付近なら下部）に配置
+    let loupeX = pt.x;
+    let loupeY = pt.y - loupeRadius - Math.round(pinRadius * 1.5 + 25);
+    if (loupeY - loupeRadius < 15) {
+      loupeY = pt.y + loupeRadius + Math.round(pinRadius * 1.5 + 25);
+    }
+    if (loupeX - loupeRadius < 15) {
+      loupeX = loupeRadius + 15;
+    } else if (loupeX + loupeRadius > ctx.canvas.width - 15) {
+      loupeX = ctx.canvas.width - loupeRadius - 15;
+    }
+
+    ctx.save();
+
+    // 虫眼鏡の影
+    ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+    ctx.shadowBlur = 22;
+    ctx.shadowOffsetY = 8;
+
+    // 虫眼鏡の外枠円（シャドウ用）
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, loupeRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+
+    // 内部に拡大画像をクリップ描画
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, loupeRadius - 4, 0, Math.PI * 2);
+    ctx.clip();
+
+    // 背景色（画像外の場合のフォールバック）
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(loupeX - loupeRadius, loupeY - loupeRadius, loupeRadius * 2, loupeRadius * 2);
+
+    // 元画像の (pt.x, pt.y) を中心に zoom 倍で描画
+    const sw = (loupeRadius * 2) / zoom;
+    const sh = (loupeRadius * 2) / zoom;
+    const sx = pt.x - sw / 2;
+    const sy = pt.y - sh / 2;
+    ctx.drawImage(
+      sourceImg,
+      sx,
+      sy,
+      sw,
+      sh,
+      loupeX - loupeRadius,
+      loupeY - loupeRadius,
+      loupeRadius * 2,
+      loupeRadius * 2
+    );
+
+    // 中心十字クロスヘア（精密位置合わせ用）
+    ctx.strokeStyle = "#ef4444"; // 鮮やかな赤
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    // 横線
+    ctx.beginPath();
+    ctx.moveTo(loupeX - 22, loupeY);
+    ctx.lineTo(loupeX + 22, loupeY);
+    ctx.stroke();
+    // 縦線
+    ctx.beginPath();
+    ctx.moveTo(loupeX, loupeY - 22);
+    ctx.lineTo(loupeX, loupeY + 22);
+    ctx.stroke();
+
+    // 中心ターゲットサークル
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, 5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.restore();
+
+    // 虫眼鏡のメタリック外枠リング
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, loupeRadius, 0, Math.PI * 2);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "#38bdf8";
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -588,6 +699,89 @@ function getCanvasCoordinates(e: MouseEvent | Touch): { x: number; y: number } {
 }
 
 /**
+ * ライブカメラモーダルを開く（画面撮影アシストガイド枠付き）
+ */
+async function openLiveCameraModal(): Promise<void> {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    cameraInput.click();
+    return;
+  }
+
+  try {
+    cameraModal.style.display = "flex";
+    await startCameraStream(currentFacingMode);
+  } catch (err) {
+    console.warn("Camera access failed or denied, falling back to input:", err);
+    closeLiveCameraModal();
+    showToast("カメラを起動できませんでした。ファイル選択を使用します");
+    cameraInput.click();
+  }
+}
+
+async function startCameraStream(facingMode: "environment" | "user"): Promise<void> {
+  stopCameraStream();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: facingMode },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+    activeCameraStream = stream;
+    cameraVideo.srcObject = stream;
+    await cameraVideo.play();
+  } catch {
+    const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    activeCameraStream = fallbackStream;
+    cameraVideo.srcObject = fallbackStream;
+    await cameraVideo.play();
+  }
+}
+
+function stopCameraStream(): void {
+  if (activeCameraStream) {
+    activeCameraStream.getTracks().forEach((t) => t.stop());
+    activeCameraStream = null;
+  }
+  if (cameraVideo) {
+    cameraVideo.srcObject = null;
+  }
+}
+
+function closeLiveCameraModal(): void {
+  stopCameraStream();
+  cameraModal.style.display = "none";
+}
+
+/**
+ * ライブカメラから写真をキャプチャして解析へ流す
+ */
+async function capturePhotoFromStream(): Promise<void> {
+  if (!cameraVideo || !activeCameraStream) return;
+  const vw = cameraVideo.videoWidth || 1280;
+  const vh = cameraVideo.videoHeight || 720;
+
+  const capCanvas = document.createElement("canvas");
+  capCanvas.width = vw;
+  capCanvas.height = vh;
+  const ctx = capCanvas.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(cameraVideo, 0, 0, vw, vh);
+
+  closeLiveCameraModal();
+  showToast("撮影完了！端末内で安全に画像を解析しています...", 3000);
+
+  const dataUrl = capCanvas.toDataURL("image/png");
+  const img = new Image();
+  img.onload = async () => {
+    await ingestCapturedImage(img, { autoCorrect: false });
+  };
+  img.src = dataUrl;
+}
+
+/**
  * イベントリスナーの初期化
  */
 function initEvents(): void {
@@ -595,9 +789,26 @@ function initEvents(): void {
   appState.subscribe(syncUiWithState);
 
   // ファイル選択・カメラ
-  btnTakePhoto.addEventListener("click", () => cameraInput.click());
+  btnTakePhoto.addEventListener("click", () => void openLiveCameraModal());
+  btnNewPhotoHeader.addEventListener("click", () => void openLiveCameraModal());
   btnSelectFile.addEventListener("click", () => fileInput.click());
-  btnNewPhotoHeader.addEventListener("click", () => fileInput.click());
+
+  // ライブカメラモーダル操作
+  btnCloseCameraModal.addEventListener("click", () => closeLiveCameraModal());
+  cameraBackdrop.addEventListener("click", () => closeLiveCameraModal());
+  btnShutter.addEventListener("click", () => void capturePhotoFromStream());
+  btnCameraFallbackFile.addEventListener("click", () => {
+    closeLiveCameraModal();
+    fileInput.click();
+  });
+  btnSwitchCamera.addEventListener("click", async () => {
+    currentFacingMode = currentFacingMode === "environment" ? "user" : "environment";
+    try {
+      await startCameraStream(currentFacingMode);
+    } catch (err) {
+      console.warn("Switch camera failed:", err);
+    }
+  });
 
   cameraInput.addEventListener("change", (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
@@ -749,18 +960,26 @@ function initEvents(): void {
     showToast(`水平補正（${angle > 0 ? "+" : ""}${angle.toFixed(1)}°）を実行し再解析しました`);
   });
 
-  // 台形補正モード起動（AI不使用で四隅を自動検出して初期配置）
-  btnPerspectiveMode.addEventListener("click", () => {
+  // 台形補正モード起動（AI不使用で四隅を自動検出して初期配置、虫眼鏡付き手動調整対応）
+  const openPerspectiveMode = () => {
     const state = appState.getState();
-    if (!state.sourceImage) return;
+    if (!state.sourceImage) {
+      showToast("画像を読み込んでから実行してください");
+      return;
+    }
 
     isPerspectiveMode = true;
     perspectiveBar.style.display = "flex";
     // 四隅を自動検出してセット
     perspectiveCorners = detectDocumentCornersAuto(state.sourceImage);
     updateCanvasRender();
-    showToast("台形補正モード: 四隅を自動検出しました。青いピンをドラッグして微調整も可能です");
-  });
+    showToast("台形補正モード: 四隅のピンをドラッグすると虫眼鏡で微調整できます");
+  };
+
+  btnPerspectiveMode.addEventListener("click", openPerspectiveMode);
+  if (btnToolbarPerspective) {
+    btnToolbarPerspective.addEventListener("click", openPerspectiveMode);
+  }
 
   // 四隅の自動再検出
   btnAutoDetectCorners.addEventListener("click", () => {
@@ -999,13 +1218,31 @@ function initEvents(): void {
   // Canvas Mouse & Touch Interactions
   // ==========================================
 
-  function findNearestCorner(corners: QuadCorners, x: number, y: number, radius: number = 40): keyof QuadCorners | null {
-    const dist = (p: Point2D) => Math.hypot(p.x - x, p.y - y);
-    if (dist(corners.topLeft) <= radius) return "topLeft";
-    if (dist(corners.topRight) <= radius) return "topRight";
-    if (dist(corners.bottomRight) <= radius) return "bottomRight";
-    if (dist(corners.bottomLeft) <= radius) return "bottomLeft";
-    return null;
+  function findNearestCorner(corners: QuadCorners, clientX: number, clientY: number): keyof QuadCorners | null {
+    const rect = renderCanvas.getBoundingClientRect();
+    const scaleX = renderCanvas.width / (rect.width || 1);
+    const scaleY = renderCanvas.height / (rect.height || 1);
+
+    const hitRadius = 48; // 画面（CSSピクセル）で半径48pxの広い判定エリア
+
+    const distToCorner = (pt: Point2D): number => {
+      const screenX = rect.left + pt.x / scaleX;
+      const screenY = rect.top + pt.y / scaleY;
+      return Math.hypot(screenX - clientX, screenY - clientY);
+    };
+
+    const dTL = distToCorner(corners.topLeft);
+    const dTR = distToCorner(corners.topRight);
+    const dBR = distToCorner(corners.bottomRight);
+    const dBL = distToCorner(corners.bottomLeft);
+
+    const minDist = Math.min(dTL, dTR, dBR, dBL);
+    if (minDist > hitRadius) return null;
+
+    if (minDist === dTL) return "topLeft";
+    if (minDist === dTR) return "topRight";
+    if (minDist === dBR) return "bottomRight";
+    return "bottomLeft";
   }
 
   // マウス移動（ホバー検出・ピンドラッグ）
@@ -1013,15 +1250,14 @@ function initEvents(): void {
     const state = appState.getState();
     if (!state.sourceImage) return;
 
-    const { x, y } = getCanvasCoordinates(e);
-
     // 台形補正モード中のピン操作
     if (isPerspectiveMode && perspectiveCorners) {
       if (activeCornerKey) {
+        const { x, y } = getCanvasCoordinates(e);
         perspectiveCorners[activeCornerKey] = { x, y };
         updateCanvasRender();
       } else {
-        const hoveredCorner = findNearestCorner(perspectiveCorners, x, y);
+        const hoveredCorner = findNearestCorner(perspectiveCorners, e.clientX, e.clientY);
         renderCanvas.style.cursor = hoveredCorner ? "grab" : "default";
       }
       return;
@@ -1029,6 +1265,7 @@ function initEvents(): void {
 
     if (isDrawing) return;
 
+    const { x, y } = getCanvasCoordinates(e);
     const box = findBoxAtPosition(state.boxes, x, y);
     if (box) {
       renderCanvas.style.cursor = state.mode === "select" ? "pointer" : "crosshair";
@@ -1050,17 +1287,18 @@ function initEvents(): void {
     const state = appState.getState();
     if (!state.sourceImage || e.button !== 0) return;
 
-    const { x, y } = getCanvasCoordinates(e);
-
     // 台形補正モード
     if (isPerspectiveMode && perspectiveCorners) {
-      const corner = findNearestCorner(perspectiveCorners, x, y);
+      const corner = findNearestCorner(perspectiveCorners, e.clientX, e.clientY);
       if (corner) {
         activeCornerKey = corner;
         renderCanvas.style.cursor = "grabbing";
+        updateCanvasRender(); // 即座に虫眼鏡を表示
       }
       return;
     }
+
+    const { x, y } = getCanvasCoordinates(e);
 
     if (state.mode === "select") {
       const box = findBoxAtPosition(state.boxes, x, y);
@@ -1100,8 +1338,11 @@ function initEvents(): void {
   // マウスアップ（ドラッグ完了）
   window.addEventListener("mouseup", () => {
     if (isPerspectiveMode) {
-      activeCornerKey = null;
-      renderCanvas.style.cursor = "default";
+      if (activeCornerKey) {
+        activeCornerKey = null;
+        renderCanvas.style.cursor = "default";
+        updateCanvasRender();
+      }
       return;
     }
 
@@ -1123,16 +1364,18 @@ function initEvents(): void {
     if (e.touches.length === 1) {
       const touch = e.touches[0];
       const state = appState.getState();
-      const { x, y } = getCanvasCoordinates(touch);
 
       if (isPerspectiveMode && perspectiveCorners) {
-        const corner = findNearestCorner(perspectiveCorners, x, y);
+        const corner = findNearestCorner(perspectiveCorners, touch.clientX, touch.clientY);
         if (corner) {
           e.preventDefault();
           activeCornerKey = corner;
+          updateCanvasRender(); // 即座に虫眼鏡を表示
         }
         return;
       }
+
+      const { x, y } = getCanvasCoordinates(touch);
 
       if (state.mode === "select") {
         const box = findBoxAtPosition(state.boxes, x, y);
@@ -1177,7 +1420,10 @@ function initEvents(): void {
 
   renderCanvas.addEventListener("touchend", () => {
     if (isPerspectiveMode) {
-      activeCornerKey = null;
+      if (activeCornerKey) {
+        activeCornerKey = null;
+        updateCanvasRender();
+      }
       return;
     }
 

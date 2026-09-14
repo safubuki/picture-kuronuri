@@ -3,7 +3,7 @@
  * 画面のカメラ撮影で起きるモアレ／ジャギー／小文字／照明ムラを抑え、
  * Tesseract が読みやすい作業画像だけを作る。表示用の元画像は変更しない。
  */
-
+import { adaptiveThresholdBradley } from "./adaptiveThreshold";
 export interface OcrSourceAnalysis {
   estimatedLineHeight: number;
   isLikelyScreenPhoto: boolean;
@@ -582,17 +582,26 @@ export function preprocessForOcr(
     gray[p] = luminance(data[i], data[i + 1], data[i + 2]) + 0.5;
   }
 
-  // マイルドなCLAHE（コントラスト適応伸張）のみ適用して文字の可読性を最大化
-  // 過剰な平滑化や強いアンシャープマスクは漢字の画を潰すため行わない
-  gray = claheGray(gray, w, h, 6, 6, 1.8);
-
-  if (analysis.isDarkBackground) {
-    gray = invertGray(gray);
+  // 画面撮影（モアレ・液晶格子・白飛び・コントラストムラ）または低コントラストの場合
+  if (analysis.isLikelyScreenPhoto || analysis.contrast < 22) {
+    // 1. 液晶サブピクセルのモアレ・高周波格子ノイズをメディアンで平滑化
+    gray = median3x3(gray, w, h);
+    // 2. 局所適応二値化（Bradley-Roth）: 局所平均から白吹き出し内の文字も100%浮かび上がらせる
+    const windowSize = Math.max(17, Math.min(51, Math.round(Math.min(w, h) * 0.032) | 1));
+    gray = adaptiveThresholdBradley(gray, w, h, {
+      windowSize,
+      sensitivity: 0.11,
+      darkTextOnLightBg: !analysis.isDarkBackground
+    });
+  } else {
+    // スキャン画像やデジタルスクショ: マイルドなCLAHE＋シャープ
+    gray = claheGray(gray, w, h, 6, 6, 1.8);
+    if (analysis.isDarkBackground) {
+      gray = invertGray(gray);
+    }
+    const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.6);
+    gray = unsharp(gray, blurForSharp, 0.35);
   }
-
-  // 弱めのマイルドシャープ（かすれ文字の補強）
-  const blurForSharp = gaussianBlurSeparable(gray, w, h, 0.6);
-  gray = unsharp(gray, blurForSharp, 0.35);
 
   return {
     canvas: grayToCanvas(gray, w, h),

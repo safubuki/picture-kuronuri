@@ -95,9 +95,18 @@ function fitWindowToInk(
   };
 
   // 元のサイズからかけ離れた膨張（1.25倍超）や極端な縮小は拒絶
-  if (fitted.width > rect.width * 1.3 || fitted.width < rect.width * 0.7) return null;
-  if (fitted.height > rect.height * 1.3 || fitted.height < rect.height * 0.7) return null;
-  if (overlapRatio(fitted, rect) < 0.6) return null;
+  if (fitted.width > rect.width * 1.25 || fitted.width < rect.width * 0.75) return null;
+  if (fitted.height > rect.height * 1.25 || fitted.height < rect.height * 0.75) return null;
+  if (overlapRatio(fitted, rect) < 0.65) return null;
+
+  // スナップによる中心の移動量を最大 4px に制限（ノイズやモアレへの階段状ドリフトを完全防止）
+  const origCenterX = rect.x + rect.width / 2;
+  const origCenterY = rect.y + rect.height / 2;
+  const newCenterX = fitted.x + fitted.width / 2;
+  const newCenterY = fitted.y + fitted.height / 2;
+  if (Math.abs(newCenterX - origCenterX) > 4 || Math.abs(newCenterY - origCenterY) > 4) {
+    return null;
+  }
 
   return fitted;
 }

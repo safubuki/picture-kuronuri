@@ -179,6 +179,30 @@ export function detectPersonsInText(text: string): PersonMatch[] {
     }
   }
 
+  // 2b. 姓名スペース区切り汎用パターン (例: "〇〇 〇〇", "山 田 太 郎", "鈴木 一郎")
+  // 名字辞書にない未知の姓名でも、スペースで区切られた漢字2〜4文字＋漢字1〜3文字を汎用検出
+  const spacedNameRegex = /([\p{Script=Han}]{1,4})[\s\u3000]+([\p{Script=Han}]{1,4})/gu;
+  let sMatch: RegExpExecArray | null;
+  while ((sMatch = spacedNameRegex.exec(text)) !== null) {
+    const full = sMatch[0];
+    const surnamePart = sMatch[1];
+    const givenPart = sMatch[2];
+    if (!/(?:確認|承知|了解|連絡|対応|添付|送付|返信|相談|報告|依頼|検討|契約|費用|電話|住所|本日|明日|昨日|至急)/.test(surnamePart + givenPart)) {
+      const startIndex = sMatch.index;
+      const endIndex = startIndex + full.length;
+      const isCovered = results.some(r => startIndex >= r.startIndex && endIndex <= r.endIndex);
+      if (!isCovered) {
+        results.push({
+          matchedText: full,
+          nameOnly: full,
+          startIndex,
+          endIndex,
+          reason: "full_name_pattern"
+        });
+      }
+    }
+  }
+
   // 3. 名字単体マッチング (例: 「山田」「鈴木」)
   for (let i = 0; i < compact.length; i++) {
     const sub = compact.slice(i);
@@ -221,22 +245,23 @@ export function isLikelyChatSender(text: string): boolean {
     return false;
   }
 
-  // フルネーム（スペース混入も吸収: 例「山田 太郎」「山 田 太 郎」「山田太郎」「鈴木一郎」）
   const compact = t.replace(/[\s\t\u3000]/g, "");
-  if (compact.length >= 2 && compact.length <= 8) {
-    const compactSurname = matchSurname(compact);
-    if (compactSurname && compactSurname.length >= 2) {
-      if (compact.length === compactSurname.length) return true; // 名字単体
-      const given = compact.slice(compactSurname.length);
-      if (given.length <= 4 && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{1,4}$/u.test(given)) {
-        return true; // 名字＋名前
-      }
+  if (compact.length < 2) return false;
+
+  // 汎用判定: 漢字2〜6文字のみ（珍しい名字や未知の氏名を辞書不要で普遍的に保護）
+  if (/^[\p{Script=Han}]{2,6}$/u.test(compact)) {
+    // 動作動詞・名詞・ビジネス用語（「確認」「承知」「連絡」「返信」等）を除外
+    if (!/(?:確認|承知|了解|連絡|対応|添付|送付|返信|相談|報告|依頼|検討|完了|開始|予定|本日|明日|昨日|午前|午後|至急|契約|重要|質問|回答)/.test(compact)) {
+      return true;
     }
   }
 
-  // 名字単体（2〜4文字）
-  const surname = matchSurname(t);
-  if (surname && surname === t) return true;
+  // 汎用判定: カタカナ2〜8文字（外国人名・ニックネーム等）
+  if (/^[\p{Script=Katakana}ー]{2,8}$/u.test(compact)) {
+    if (!/(?:プロジェクト|グループ|メッセージ|ファイル|カレンダー|スタンプ|メンバー|チャンネル)/.test(compact)) {
+      return true;
+    }
+  }
 
   // アルファベットのみの短いユーザー名（例: "alice", "ken_tanaka"）
   if (/^[a-zA-Z0-9_.]{2,15}$/.test(t)) return true;

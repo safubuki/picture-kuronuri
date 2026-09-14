@@ -80,6 +80,9 @@
             <button id="btnRedo" class="tool-btn" title="やり直す" disabled>
               ↪️ 進む
             </button>
+            <button id="btnToolbarPerspective" class="tool-btn" title="斜め撮影写真の4隅を虫眼鏡で微調整して正対化">
+              📐 4隅調整
+            </button>
             <button id="btnReset" class="tool-btn" title="画像を閉じる">
               ✕ 閉じる
             </button>
@@ -88,10 +91,10 @@
 
         <!-- Perspective Correction Toolbar (Shown when active) -->
         <div id="perspectiveBar" style="display: none; background: rgba(2, 132, 199, 0.18); border-bottom: 1px solid var(--primary-light); padding: 0.6rem 1.25rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; z-index: 10;">
-          <span style="font-size: 0.82rem; font-weight: 600; color: var(--primary-light);">🔲 四隅のピン（青丸）をドラッグして画面の角に合わせ、「補正を実行」を押してください</span>
+          <span style="font-size: 0.82rem; font-weight: 600; color: var(--primary-light);">🔲 4隅ピンをドラッグすると<b>拡大鏡（虫眼鏡）</b>が表示されます。画面の角にピタッと合わせて「補正を実行」を押してください</span>
           <div style="display: flex; gap: 0.5rem;">
-            <button id="btnAutoDetectCorners" class="btn btn-secondary btn-sm" title="AIを使わずにエッジ解析で四隅を自動検出">🔍 四隅を自動検出</button>
-            <button id="btnApplyPerspective" class="btn btn-primary btn-sm">補正を実行</button>
+            <button id="btnAutoDetectCorners" class="btn btn-secondary btn-sm" title="AIを使わずにエッジ解析で四隅を自動検出">🔍 自動検出</button>
+            <button id="btnApplyPerspective" class="btn btn-primary btn-sm" style="font-weight: bold; background: #0284c7;">補正を実行</button>
             <button id="btnCancelPerspective" class="btn btn-secondary btn-sm">キャンセル</button>
           </div>
         </div>
@@ -386,8 +389,65 @@
       </aside>
     </main>
 
+    <!-- Realtime Camera Viewfinder Modal -->
+    <div id="cameraModal" class="camera-modal" style="display: none;">
+      <div class="camera-modal-backdrop" id="cameraBackdrop"></div>
+      <div class="camera-modal-content">
+        <!-- Header -->
+        <div class="camera-modal-header">
+          <div class="camera-modal-title">
+            <span class="camera-live-dot"></span>
+            <span>画面撮影アシスト</span>
+          </div>
+          <div class="camera-header-tools">
+            <button id="btnSwitchCamera" class="camera-icon-btn" title="イン/アウトカメラ切り替え">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.21 1.005 4.185 2.586 5.586L4 18h6v-6l-2.414 2.414A5.96 5.96 0 0 1 6 10c0-3.314 2.686-6 6-6s6 2.686 6 6c0 1.657-.672 3.157-1.757 4.243L18 16c1.238-1.542 2-3.486 2-6z"/>
+              </svg>
+            </button>
+            <button id="btnCloseCameraModal" class="camera-icon-btn" title="閉じる">
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <!-- Viewfinder Box -->
+        <div class="camera-viewfinder-container">
+          <video id="cameraVideo" class="camera-video" autoplay playsinline muted></video>
+          
+          <!-- Realtime Alignment Guides (Reticle / Frame) -->
+          <div class="camera-guide-overlay">
+            <div class="guide-frame">
+              <div class="guide-corner guide-tl"></div>
+              <div class="guide-corner guide-tr"></div>
+              <div class="guide-corner guide-br"></div>
+              <div class="guide-corner guide-bl"></div>
+              <div class="guide-crosshair horizontal"></div>
+              <div class="guide-crosshair vertical"></div>
+            </div>
+            <div class="guide-instruction-pill">
+              <span>📐 モニターや画面を四隅の枠に合わせて撮影してください</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Camera Controls Bottom -->
+        <div class="camera-modal-footer">
+          <button id="btnCameraFallbackFile" class="btn btn-secondary btn-sm" title="ファイルから写真を選択">
+            📁 ファイル選択
+          </button>
+          <button id="btnShutter" class="camera-shutter-btn" title="写真を撮影">
+            <span class="shutter-inner"></span>
+          </button>
+          <div style="width: 90px; text-align: right;">
+            <span style="font-size: 0.72rem; color: var(--text-dim);">端末内完結</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Hidden File Inputs -->
-    <!-- Camera capture for mobile -->
+    <!-- Camera capture for mobile fallback -->
     <input type="file" id="cameraInput" class="hidden-input" accept="image/*" capture="environment" />
     <!-- Standard file picker -->
     <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
