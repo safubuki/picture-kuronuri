@@ -5,6 +5,7 @@ import { detectPersonsInText, isLikelyChatSender } from "./rules/honorifics";
 import { detectPiiInText } from "./rules/piiPatterns";
 import { snapBoxesToInk } from "./inkSnap";
 import { extractEntitiesWithLocalAi } from "./localAiNer";
+import { isLlmOptInEnabled, extractConfidentialKeywordsWithLlm } from "./localLlm";
 
 export type RedactType =
   | "face"
@@ -153,6 +154,37 @@ export async function analyzeImageForRedaction(
       }
     } catch (err) {
       console.warn("[redactionEngine] Local AI NER skipped:", err);
+    }
+  }
+
+  // 3.5 端末内オプトイン極小LLMによる文脈機密キーワード抽出
+  if (isLlmOptInEnabled() && fullText.trim().length > 0) {
+    try {
+      const llmKeywords = await extractConfidentialKeywordsWithLlm(fullText, (status) => {
+        onProgress?.({ status, progress: 0.93 });
+      });
+      for (const kw of llmKeywords) {
+        for (const line of ocrResult.lines) {
+          const matches = findEntityInLineWithFuzzy(line.text, kw);
+          for (const m of matches) {
+            const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
+            if (rect) {
+              boxes.push({
+                id: `llm-confidential-${line.bbox.x0}-${m.startIndex}`,
+                type: "pii",
+                label: "機密・文脈 (LLM)",
+                text: m.matchedText,
+                reason: "端末内極小LLM文脈判定",
+                rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+                enabled: true,
+                confidence: 0.9
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[redactionEngine] Local LLM extraction skipped:", err);
     }
   }
 

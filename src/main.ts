@@ -15,6 +15,9 @@ import {
 import { defaultQuadCorners } from "./engine/screenQuad";
 import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine/capturePipeline";
 import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
+import { registerSW } from "virtual:pwa-register";
+import { ModelCacheManager } from "./engine/modelCache";
+import { isLlmOptInEnabled, setLlmOptInEnabled, getLocalLlmPipeline } from "./engine/localLlm";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -1879,5 +1882,157 @@ function initEvents(): void {
   });
 }
 
+function initPwaAndStorageManager(): void {
+  // Service Worker 登録
+  try {
+    registerSW({
+      immediate: true,
+      onNeedRefresh() {
+        showToast("新しいバージョンが利用可能です。再読み込みで更新されます。");
+      },
+      onOfflineReady() {
+        console.log("[PWA] Ready to work offline!");
+      }
+    });
+  } catch (e) {
+    console.warn("[PWA] Service worker registration:", e);
+  }
+
+  // PWA インストールプロンプト
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let deferredPrompt: any = null;
+  const btnPwaInstall = document.getElementById("btnPwaInstall") as HTMLButtonElement | null;
+  const btnPwaInstallInModal = document.getElementById("btnPwaInstallInModal") as HTMLButtonElement | null;
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (btnPwaInstall) btnPwaInstall.style.display = "inline-flex";
+  });
+
+  const triggerInstall = async () => {
+    if (!deferredPrompt) {
+      showToast("ブラウザのメニューから「ホーム画面に追加」してください");
+      return;
+    }
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") {
+      showToast("アプリがホーム画面に追加されました！");
+      if (btnPwaInstall) btnPwaInstall.style.display = "none";
+    }
+    deferredPrompt = null;
+  };
+
+  btnPwaInstall?.addEventListener("click", triggerInstall);
+  btnPwaInstallInModal?.addEventListener("click", triggerInstall);
+
+  // ストレージ管理モーダル
+  const modal = document.getElementById("modalModelStorage") as HTMLDivElement | null;
+  const btnOpen = document.getElementById("btnOpenStorageModal") as HTMLButtonElement | null;
+  const btnClose = document.getElementById("btnCloseStorageModal") as HTMLButtonElement | null;
+  const backdrop = document.getElementById("storageBackdrop") as HTMLDivElement | null;
+  const btnRefresh = document.getElementById("btnRefreshStorageStats") as HTMLButtonElement | null;
+  const btnClear = document.getElementById("btnClearModelCaches") as HTMLButtonElement | null;
+  const toggleLlm = document.getElementById("toggleLlmOptIn") as HTMLInputElement | null;
+  const toggleLlmTrack = document.getElementById("toggleLlmTrack") as HTMLSpanElement | null;
+  const toggleLlmThumb = document.getElementById("toggleLlmThumb") as HTMLSpanElement | null;
+  const llmProgressContainer = document.getElementById("llmProgressContainer") as HTMLDivElement | null;
+  const llmProgressBar = document.getElementById("llmProgressBar") as HTMLDivElement | null;
+  const llmProgressStatus = document.getElementById("llmProgressStatus") as HTMLSpanElement | null;
+  const llmProgressPercent = document.getElementById("llmProgressPercent") as HTMLSpanElement | null;
+
+  const storageTotalBytes = document.getElementById("storageTotalBytes") as HTMLSpanElement | null;
+  const statusOcrCache = document.getElementById("statusOcrCache") as HTMLSpanElement | null;
+  const statusNerCache = document.getElementById("statusNerCache") as HTMLSpanElement | null;
+
+  const updateToggleUi = (checked: boolean) => {
+    if (!toggleLlmTrack || !toggleLlmThumb) return;
+    if (checked) {
+      toggleLlmTrack.style.backgroundColor = "#0284c7";
+      toggleLlmThumb.style.transform = "translateX(20px)";
+    } else {
+      toggleLlmTrack.style.backgroundColor = "#334155";
+      toggleLlmThumb.style.transform = "translateX(0px)";
+    }
+  };
+
+  const updateStorageStats = async () => {
+    if (!storageTotalBytes) return;
+    try {
+      storageTotalBytes.textContent = "計算中...";
+      const stats = await ModelCacheManager.getCacheStorageStats();
+      const mb = (stats.totalBytes / (1024 * 1024)).toFixed(1);
+      storageTotalBytes.textContent = `${mb} MB (計 ${stats.itemsCount} ファイル)`;
+
+      if (statusOcrCache) {
+        statusOcrCache.textContent = stats.models.ocr.isCached ? "保存済み" : "自動取得";
+        statusOcrCache.style.color = stats.models.ocr.isCached ? "#10b981" : "var(--text-dim)";
+      }
+      if (statusNerCache) {
+        statusNerCache.textContent = stats.models.ner.isCached ? "保存済み" : "初回解析時に保存";
+        statusNerCache.style.color = stats.models.ner.isCached ? "#10b981" : "var(--text-dim)";
+      }
+    } catch {
+      storageTotalBytes.textContent = "取得エラー";
+    }
+  };
+
+  if (toggleLlm) {
+    toggleLlm.checked = isLlmOptInEnabled();
+    updateToggleUi(toggleLlm.checked);
+
+    toggleLlm.addEventListener("change", async () => {
+      const enabled = toggleLlm.checked;
+      setLlmOptInEnabled(enabled);
+      updateToggleUi(enabled);
+
+      if (enabled) {
+        if (llmProgressContainer) llmProgressContainer.style.display = "block";
+        showToast("🤖 文脈理解AI（LLM）の初期化を開始します");
+        try {
+          await getLocalLlmPipeline((status, progress) => {
+            if (llmProgressStatus) llmProgressStatus.textContent = status;
+            if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
+            if (llmProgressBar) llmProgressBar.style.width = `${Math.round(progress * 100)}%`;
+          });
+          showToast("✨ 文脈理解AIの準備が完了しました！");
+          await updateStorageStats();
+        } catch (err) {
+          showToast("⚠️ 文脈AIのロードに失敗しました");
+        } finally {
+          if (llmProgressContainer) llmProgressContainer.style.display = "none";
+        }
+      } else {
+        showToast("文脈理解AIを無効化しました");
+      }
+    });
+  }
+
+  const openModal = () => {
+    if (modal) modal.style.display = "flex";
+    updateStorageStats();
+  };
+
+  const closeModal = () => {
+    if (modal) modal.style.display = "none";
+  };
+
+  btnOpen?.addEventListener("click", openModal);
+  btnClose?.addEventListener("click", closeModal);
+  backdrop?.addEventListener("click", closeModal);
+  btnRefresh?.addEventListener("click", updateStorageStats);
+
+  btnClear?.addEventListener("click", async () => {
+    if (confirm("端末に保存されているAIモデルキャッシュをすべて削除しますか？\n（次回の自動検出時に必要に応じて再ダウンロードされます）")) {
+      await ModelCacheManager.clearAll();
+      showToast("🗑️ キャッシュを消去しました");
+      await updateStorageStats();
+    }
+  });
+}
+
 // 初期化実行
 initEvents();
+initPwaAndStorageManager();
+
