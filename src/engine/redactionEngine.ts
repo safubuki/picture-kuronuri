@@ -4,6 +4,7 @@ import { detectCompaniesInText } from "./rules/companyRules";
 import { detectPersonsInText, isLikelyChatSender } from "./rules/honorifics";
 import { detectPiiInText } from "./rules/piiPatterns";
 import { snapBoxesToInk } from "./inkSnap";
+import { extractEntitiesWithLocalAi } from "./localAiNer";
 
 export type RedactType =
   | "face"
@@ -108,9 +109,48 @@ export async function analyzeImageForRedaction(
     (ocrResult.analysis?.estimatedLineHeight || 99) > 0 &&
     (ocrResult.analysis?.estimatedLineHeight || 99) < 18;
 
-  onProgress?.({ status: "ルールベース個人情報解析中...", progress: 0.9 });
+  // 3. 端末内完全ローカルAI（Transformers.js NER）による文脈理解エンティティ抽出
+  const fullText = ocrResult.lines.map(l => l.text).join("\n");
+  if (fullText.trim().length > 0) {
+    try {
+      const aiEntities = await extractEntitiesWithLocalAi(fullText, (status, p) => {
+        onProgress?.({ status, progress: 0.85 + p * 0.08 });
+      });
 
-  // 3. OCRテキストに対するルールベース解析
+      for (const entity of aiEntities) {
+        if (entity.type === "person" && !options.detectPersons) continue;
+        if (entity.type === "company" && !options.detectCompanies) continue;
+        if (entity.type === "location" && !options.detectPii) continue;
+
+        // 各行をスキャンしてエンティティの文字座標を特定
+        for (const line of ocrResult.lines) {
+          const idx = line.text.indexOf(entity.text);
+          if (idx !== -1) {
+            const rect = calculateBBoxForRange(line, idx, idx + entity.text.length);
+            if (rect) {
+              const label = entity.type === "person" ? "人名 (AI)" : entity.type === "company" ? "会社名 (AI)" : "住所 (AI)";
+              boxes.push({
+                id: `ai-${entity.type}-${line.bbox.x0}-${idx}`,
+                type: entity.type === "location" ? "pii" : entity.type,
+                label,
+                text: entity.text,
+                reason: `端末内AI文脈認識 (${Math.round(entity.score * 100)}%)`,
+                rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+                enabled: true,
+                confidence: entity.score
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[redactionEngine] Local AI NER skipped:", err);
+    }
+  }
+
+  onProgress?.({ status: "個人情報解析・統合中...", progress: 0.94 });
+
+  // 4. OCRテキストに対するルールベース解析（相補的ハイブリッド）
   for (const line of ocrResult.lines) {
     const lineText = line.text;
     if (!lineText || lineText.trim().length === 0) continue;
