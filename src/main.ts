@@ -73,6 +73,8 @@ const styleWhiteout = document.getElementById("styleWhiteout") as HTMLButtonElem
 const styleMosaic = document.getElementById("styleMosaic") as HTMLButtonElement;
 const styleBlur = document.getElementById("styleBlur") as HTMLButtonElement;
 const btnCompare = document.getElementById("btnCompare") as HTMLButtonElement;
+const btnClearAllBoxes = document.getElementById("btnClearAllBoxes") as HTMLButtonElement;
+const btnSideClearAll = document.getElementById("btnSideClearAll") as HTMLButtonElement;
 const btnUndo = document.getElementById("btnUndo") as HTMLButtonElement;
 const btnRedo = document.getElementById("btnRedo") as HTMLButtonElement;
 const btnReset = document.getElementById("btnReset") as HTMLButtonElement;
@@ -699,6 +701,8 @@ function syncUiWithState(state: AppState): void {
   btnDownloadImage.disabled = !hasImage;
   btnCopyRedactedText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
   btnCompare.disabled = !hasImage;
+  if (btnClearAllBoxes) btnClearAllBoxes.disabled = !hasImage || state.boxes.length === 0;
+  if (btnSideClearAll) btnSideClearAll.disabled = !hasImage || state.boxes.length === 0;
   btnReset.disabled = !hasImage;
   btnReanalyze.disabled = !hasImage;
 
@@ -1031,7 +1035,16 @@ function initEvents(): void {
   });
   btnCompare.addEventListener("touchend", () => appState.setComparing(false));
 
-  // Undo / Redo / Reset
+  // Undo / Redo / Reset / ClearAll
+  const clearAllAction = () => {
+    const state = appState.getState();
+    if (!state.sourceImage || state.boxes.length === 0) return;
+    appState.clearAllBoxes();
+    showToast("🗑️ すべての黒塗りを解除しました（「↩️ 戻す」で復元できます）");
+  };
+  if (btnClearAllBoxes) btnClearAllBoxes.addEventListener("click", clearAllAction);
+  if (btnSideClearAll) btnSideClearAll.addEventListener("click", clearAllAction);
+
   btnUndo.addEventListener("click", () => appState.undo());
   btnRedo.addEventListener("click", () => appState.redo());
   btnReset.addEventListener("click", () => {

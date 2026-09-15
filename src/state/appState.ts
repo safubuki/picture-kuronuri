@@ -132,6 +132,13 @@ export class StateManager {
     this.notify();
   }
 
+  public clearAllBoxes(): void {
+    if (this.state.boxes.length === 0) return;
+    this.state.boxes = [];
+    this.pushHistory([]);
+    this.notify();
+  }
+
   public setFilterOptions(options: Partial<RedactionFilterOptions>): void {
     this.state.filterOptions = { ...this.state.filterOptions, ...options };
     this.notify();

@@ -74,6 +74,9 @@
             <button id="btnCompare" class="tool-btn" title="元画像と比較（長押しまたはトグル）">
               👁️ 元画像
             </button>
+            <button id="btnClearAllBoxes" class="tool-btn" title="すべての黒塗りを一括解除（手動で引き直したい時に便利）">
+              🗑️ 全解除
+            </button>
             <button id="btnUndo" class="tool-btn" title="元に戻す" disabled>
               ↩️ 戻す
             </button>
@@ -427,9 +430,11 @@
 
         <!-- Detected Items Quick List -->
         <div class="panel-card">
-          <div class="panel-title">
+          <div class="panel-title" style="display: flex; justify-content: space-between; align-items: center;">
             <span>保護箇所一覧</span>
-            <span style="font-size: 0.75rem; color: var(--text-dim);">タップでON/OFF</span>
+            <button id="btnSideClearAll" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 2px 8px; border-color: rgba(244, 63, 94, 0.4); color: #fda4af;" title="現在の黒塗りをすべて解除">
+              🗑️ 全解除
+            </button>
           </div>
           <div id="detectedItemsList" class="detected-list">
             <div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem;">

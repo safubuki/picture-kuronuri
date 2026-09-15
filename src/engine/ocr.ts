@@ -75,14 +75,30 @@ export async function getOcrWorker(
   });
 
   await worker.setParameters({
-    // チャット画面・書類はアバター、ヘッダー、吹き出しが散在するため AUTO（完全自動セグメンテーション）が最適
-    tessedit_pageseg_mode: PSM.AUTO,
-    preserve_interword_spaces: "1"
+    // チャット画面・スクリーンショット・書類の行とブロックを正確にセグメンテーション
+    tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+    preserve_interword_spaces: "0"
   });
 
   cachedWorker = worker;
   currentLanguage = lang;
   return worker;
+}
+
+/**
+ * 日本語（CJK）文字間に誤挿入された半角スペースを自動クリーンアップ
+ */
+export function cleanJapaneseOcrText(text: string): string {
+  if (!text) return "";
+  // 複数回適用して連続するCJK文字間スペースをすべて除去（英単語間のスペースは保持）
+  let cleaned = text;
+  for (let i = 0; i < 3; i++) {
+    cleaned = cleaned.replace(
+      /([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu,
+      "$1$2"
+    );
+  }
+  return cleaned;
 }
 
 interface BBox {
@@ -489,10 +505,16 @@ export async function runOcr(
     scaleOcrGeometry(parsed.lines, parsed.symbols, scale);
     const merged = mergeFragmentedLines(parsed.lines);
 
+    for (const line of merged) {
+      line.text = cleanJapaneseOcrText(line.text);
+      line.rawText = cleanJapaneseOcrText(line.rawText);
+    }
+    const cleanFull = cleanJapaneseOcrText(parsed.fullText || merged.map((l) => l.text).join("\n"));
+
     onProgress?.({ status: "完了", progress: 1.0 });
 
     return {
-      fullText: parsed.fullText,
+      fullText: cleanFull,
       lines: merged,
       symbols: parsed.symbols,
       scale,

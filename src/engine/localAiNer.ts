@@ -214,21 +214,24 @@ export async function extractEntitiesWithLocalAi(
 
     const allEntitiesMap = new Map<string, ExtractedEntity>();
 
+    // 日本語テキストを事前クリーンアップ（CJK文字間のスペースを除去してBERT Tokenizerの精度を最大化）
+    const cleanFullText = fullText.replace(/([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu, "$1$2");
+
     // Pass 1: ドキュメント全体（大域文脈）でのNER推論
-    const globalEntities = await runNerOnSnippet(pipe, fullText, minScore);
+    const globalEntities = await runNerOnSnippet(pipe, cleanFullText, minScore);
     for (const e of globalEntities) {
       const key = `${e.type}:${e.text.trim()}`;
       allEntitiesMap.set(key, e);
     }
 
     // Pass 2: 行単位 / メッセージ単位（局所短文文脈）でのNER推論
-    // 短文ではAttentionが人名や組織名に強く集中し、長文で見落とされた人名を確実に救済
     const lines = linesText && linesText.length > 0
       ? linesText
-      : fullText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 2);
+      : cleanFullText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 2);
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      const rawLine = lines[i];
+      const line = rawLine.replace(/([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu, "$1$2").trim();
       if (line.length < 2) continue;
 
       // チャット送信者ヘッダー風の行は「送信者: 〇〇」のようにプロンプト補強して判定
@@ -247,6 +250,38 @@ export async function extractEntitiesWithLocalAi(
               text: cleanedText
             });
           }
+        }
+      }
+
+      // Pass 3: 敬称・宛先・組織キーワードの周辺文脈に特化した高感度抽出
+      // 「〇〇様」「〇〇さん」「株式会社〇〇」などのパターンを行から抽出してAI再検証
+      const honorificMatch = line.match(/([^\s,，、。！？!?]{2,8})(様|さん|殿|君|氏|先生|部長|課長|係長|主任|代表|専務|常務)/);
+      if (honorificMatch && honorificMatch[1]) {
+        const candidate = honorificMatch[1].trim();
+        if (candidate.length >= 2 && !/^(お疲れ|よろしく|ありがとう|承知|了解|相談|確認)$/.test(candidate)) {
+          // 「担当者: 〇〇」としてAI判定
+          const honorificEntities = await runNerOnSnippet(pipe, `担当者: ${candidate}`, minScore * 0.7);
+          for (const he of honorificEntities) {
+            const hText = he.text.replace(/^担当者[:：\s]*/, "").trim();
+            if (hText.length >= 2) {
+              const key = `person:${hText}`;
+              allEntitiesMap.set(key, {
+                type: "person",
+                text: hText,
+                start: 0,
+                end: hText.length,
+                score: Math.max(0.75, he.score)
+              });
+            }
+          }
+          // もしAIが自信なさげでも敬称直前の語句は高確度で人名として救済
+          allEntitiesMap.set(`person:${candidate}`, {
+            type: "person",
+            text: candidate,
+            start: 0,
+            end: candidate.length,
+            score: 0.88
+          });
         }
       }
     }

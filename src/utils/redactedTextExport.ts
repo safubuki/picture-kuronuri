@@ -57,52 +57,131 @@ export function generateRedactedText(
   const processedLines: string[] = [];
 
   for (const line of ocrResult.lines) {
-    let lineText = line.text;
-    if (!lineText || lineText.trim().length === 0) continue;
+    const originalText = line.text;
+    if (!originalText || originalText.trim().length === 0) continue;
+
+    const chars = [...originalText];
+    const nChars = chars.length;
+    if (nChars === 0) continue;
+
+    // 各文字のバウンディングボックスを取得または推定
+    const symbols = (line.alignedSymbols && line.alignedSymbols.length === nChars)
+      ? line.alignedSymbols
+      : (line.symbols && line.symbols.length === nChars)
+      ? line.symbols
+      : null;
+
+    const totalW = Math.max(1, line.bbox.x1 - line.bbox.x0);
+    const charW = totalW / nChars;
+
+    const charBBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (let i = 0; i < nChars; i++) {
+      if (symbols && symbols[i] && symbols[i].bbox) {
+        charBBoxes.push(symbols[i].bbox);
+      } else {
+        charBBoxes.push({
+          x0: Math.round(line.bbox.x0 + i * charW),
+          y0: line.bbox.y0,
+          x1: Math.round(line.bbox.x0 + (i + 1) * charW),
+          y1: line.bbox.y1
+        });
+      }
+    }
+
+    // 各文字がどのボックスで伏字化されるかを記録
+    interface CharCover {
+      covered: boolean;
+      placeholder: string;
+      boxId: string;
+      type: RedactBox["type"];
+    }
+    const coverage: (CharCover | null)[] = new Array(nChars).fill(null);
 
     // この行の Y 座標と重なるボックスを抽出
     const lineBoxes = enabledBoxes.filter((box) => {
-      const boxMidY = box.rect.y + box.rect.height / 2;
-      return boxMidY >= line.bbox.y0 - 6 && boxMidY <= line.bbox.y1 + 6;
+      const bY0 = box.rect.y;
+      const bY1 = box.rect.y + box.rect.height;
+      return bY1 >= line.bbox.y0 - 4 && bY0 <= line.bbox.y1 + 4;
     });
-
-    if (lineBoxes.length === 0) {
-      processedLines.push(lineText);
-      continue;
-    }
-
-    // 行内の文字列置換
-    // ボックスに記録されたテキストやマッチ語句を長い順に置換
-    lineBoxes.sort((a, b) => (b.text?.length || 0) - (a.text?.length || 0));
 
     for (const box of lineBoxes) {
       const placeholder = getPlaceholder(box);
+
+      // A. テキストが明示されているボックスは文字列マッチを優先
+      let matchedByText = false;
       if (box.text && box.text.trim().length > 0) {
-        const target = box.text.trim();
-        // スペースを含めたゆらぎ置換
-        const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const fuzzyRegex = new RegExp(escaped.split("").join("\\s*"), "gu");
-        if (fuzzyRegex.test(lineText)) {
-          lineText = lineText.replace(fuzzyRegex, placeholder);
-          recordStat(stats, box.type);
-          continue;
+        const target = box.text.trim().replace(/[\s\u3000]/g, "");
+        const cleanLine = originalText.replace(/[\s\u3000]/g, "");
+        if (target.length >= 2 && cleanLine.includes(target)) {
+          // 元テキスト上の出現位置を特定
+          let searchIdx = 0;
+          while (searchIdx < originalText.length) {
+            const found = originalText.indexOf(box.text.trim(), searchIdx);
+            if (found === -1) break;
+            const endIdx = found + box.text.trim().length;
+            for (let c = found; c < endIdx; c++) {
+              if (c < nChars) {
+                coverage[c] = { covered: true, placeholder, boxId: box.id, type: box.type };
+              }
+            }
+            matchedByText = true;
+            searchIdx = endIdx;
+          }
         }
       }
 
-      // X 座標による比率置換（ボックスの位置から推測）
-      const totalW = Math.max(1, line.bbox.x1 - line.bbox.x0);
-      const startRatio = Math.max(0, (box.rect.x - line.bbox.x0) / totalW);
-      const endRatio = Math.min(1, (box.rect.x + box.rect.width - line.bbox.x0) / totalW);
-      const sIdx = Math.floor(startRatio * lineText.length);
-      const eIdx = Math.min(lineText.length, Math.ceil(endRatio * lineText.length));
+      // B. テキストで完全一致しなかった場合、または手動黒塗りは文字座標との幾何交差判定
+      if (!matchedByText) {
+        const bx0 = box.rect.x;
+        const bx1 = box.rect.x + box.rect.width;
+        const by0 = box.rect.y;
+        const by1 = box.rect.y + box.rect.height;
 
-      if (eIdx > sIdx && sIdx >= 0) {
-        lineText = lineText.slice(0, sIdx) + placeholder + lineText.slice(eIdx);
-        recordStat(stats, box.type);
+        for (let i = 0; i < nChars; i++) {
+          const cb = charBBoxes[i];
+          const cxMid = (cb.x0 + cb.x1) / 2;
+          const cyMid = (cb.y0 + cb.y1) / 2;
+
+          // 文字の中心がボックス内にある、または横方向のオーバーラップが50%以上
+          const xOverlap = Math.max(0, Math.min(bx1, cb.x1) - Math.max(bx0, cb.x0));
+          const charWidth = Math.max(1, cb.x1 - cb.x0);
+          const isCoveredX = (cxMid >= bx0 && cxMid <= bx1) || (xOverlap / charWidth >= 0.45);
+          const isCoveredY = (cyMid >= by0 && cyMid <= by1) || (by1 >= cb.y0 && by0 <= cb.y1);
+
+          if (isCoveredX && isCoveredY) {
+            coverage[i] = { covered: true, placeholder, boxId: box.id, type: box.type };
+          }
+        }
       }
     }
 
-    processedLines.push(lineText);
+    // 連続する伏字区間をスパン置換して行テキストを再構築
+    let lineResult = "";
+    let i = 0;
+    const recordedBoxIds = new Set<string>();
+
+    while (i < nChars) {
+      const cov = coverage[i];
+      if (!cov) {
+        lineResult += chars[i];
+        i++;
+      } else {
+        const currentPlaceholder = cov.placeholder;
+        const currentBoxId = cov.boxId;
+        if (!recordedBoxIds.has(currentBoxId)) {
+          recordStat(stats, cov.type);
+          recordedBoxIds.add(currentBoxId);
+        }
+
+        // 同じボックスまたは同じプレースホルダーの連続区間をスキップ
+        while (i < nChars && coverage[i] && (coverage[i]?.boxId === currentBoxId || coverage[i]?.placeholder === currentPlaceholder)) {
+          i++;
+        }
+        lineResult += currentPlaceholder;
+      }
+    }
+
+    processedLines.push(lineResult);
   }
 
   // 連続する空行を整理

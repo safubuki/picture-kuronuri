@@ -445,6 +445,30 @@ function findEntityInLineWithFuzzy(lineText: string, entityText: string): FuzzyM
     searchPos = foundPos + 1;
   }
 
+  // 完全一致で見つからなかった場合、3文字以上なら1文字違い（OCR文字化け・誤認識）のファジー一致を探索
+  if (results.length === 0 && cleanEntity.length >= 3 && cleanLine.length >= cleanEntity.length) {
+    const targetLen = cleanEntity.length;
+    for (let i = 0; i <= cleanLine.length - targetLen; i++) {
+      const windowStr = cleanLine.slice(i, i + targetLen);
+      let diff = 0;
+      for (let j = 0; j < targetLen; j++) {
+        if (windowStr[j] !== cleanEntity[j]) diff++;
+        if (diff > 1) break;
+      }
+      if (diff === 1) {
+        const startOriginal = mapping[i];
+        const endClean = i + targetLen - 1;
+        const endOriginal = mapping[endClean] + 1;
+        results.push({
+          startIndex: startOriginal,
+          endIndex: endOriginal,
+          matchedText: lineText.slice(startOriginal, endOriginal)
+        });
+        break; // 最適な1箇所
+      }
+    }
+  }
+
   return results;
 }
 
