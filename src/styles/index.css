@@ -285,7 +285,7 @@ body::before {
   align-items: center;
   justify-content: center;
   background: #080a10;
-  overflow: auto;
+  overflow: hidden;
   padding: 1.25rem;
   user-select: none;
   min-height: 0;
@@ -418,8 +418,107 @@ body::before {
   box-shadow: var(--shadow-lg);
   border-radius: 4px;
   cursor: crosshair;
-  transition: transform 0.15s ease-out;
   margin: auto;
+  transform-origin: center center;
+  touch-action: none;
+  will-change: transform;
+}
+
+#renderCanvas.is-interacting {
+  transition: none !important;
+}
+
+#renderCanvas:not(.is-interacting) {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Floating Zoom & Line Snap Controls */
+.zoom-controls {
+  position: absolute;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  z-index: 30;
+  user-select: none;
+}
+
+.zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 0.4rem;
+  background: transparent;
+  color: #cbd5e1;
+  border: none;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.zoom-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.zoom-btn:active {
+  transform: scale(0.95);
+}
+
+.zoom-level-btn {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  padding: 0 0.5rem;
+  min-width: 48px;
+}
+
+.zoom-snap-btn {
+  gap: 0.3rem;
+  padding: 0 0.65rem;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  color: #94a3b8;
+}
+
+.zoom-snap-btn.active {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #34d399;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.zoom-btn-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 0.15rem;
+}
+
+@media (max-width: 640px) {
+  .zoom-controls {
+    bottom: 0.75rem;
+    right: 0.75rem;
+    padding: 0.25rem 0.35rem;
+  }
+  .zoom-btn {
+    height: 38px;
+    min-width: 38px;
+  }
+  .zoom-snap-btn .zoom-btn-text {
+    display: none;
+  }
 }
 
 /* Progress Overlay */

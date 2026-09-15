@@ -1,6 +1,7 @@
 import { appState, type AppState } from "./state/appState";
 import { analyzeImageForRedaction } from "./engine/redactionEngine";
-import { renderRedactedCanvas, findBoxAtPosition } from "./engine/canvasRenderer";
+import { renderRedactedCanvas, findBoxAtPosition, renderLineGuides } from "./engine/canvasRenderer";
+import { calculateLineSnap, type SnapResult } from "./engine/lineSnap";
 import { generateChatSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
 import { copyCanvasToClipboard, downloadCanvasImage, copyAiPromptToClipboard } from "./utils/exportUtils";
 import { rotateImage90, rotateAndDeskewImage, enhanceImageForOcr } from "./utils/imageEnhance";
@@ -28,6 +29,15 @@ const btnResetCornersFull = document.getElementById("btnResetCornersFull") as HT
 const btnAutoDetectCorners = document.getElementById("btnAutoDetectCorners") as HTMLButtonElement;
 const btnApplyPerspective = document.getElementById("btnApplyPerspective") as HTMLButtonElement;
 const btnCancelPerspective = document.getElementById("btnCancelPerspective") as HTMLButtonElement;
+
+// Zoom & Snap Controls Elements
+const zoomControls = document.getElementById("zoomControls") as HTMLDivElement;
+const btnToggleLineSnap = document.getElementById("btnToggleLineSnap") as HTMLButtonElement;
+const btnZoomOut = document.getElementById("btnZoomOut") as HTMLButtonElement;
+const btnZoomReset = document.getElementById("btnZoomReset") as HTMLButtonElement;
+const btnZoomIn = document.getElementById("btnZoomIn") as HTMLButtonElement;
+const btnZoomFit = document.getElementById("btnZoomFit") as HTMLButtonElement;
+const zoomLevelDisplay = document.getElementById("zoomLevelDisplay") as HTMLSpanElement;
 
 // Inputs
 const cameraInput = document.getElementById("cameraInput") as HTMLInputElement;
@@ -109,12 +119,41 @@ const detectedItemsList = document.getElementById("detectedItemsList") as HTMLDi
 const toast = document.getElementById("toast") as HTMLDivElement;
 const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 
-// Drawing State Variables
+// Drawing & Line Snap State Variables
 let isDrawing = false;
 let drawStartX = 0;
 let drawStartY = 0;
 let currentDrawRect: { x: number; y: number; width: number; height: number } | null = null;
+let currentSnapResult: SnapResult | null = null;
+let activeSnappedLine: import("./engine/ocr").OcrLine | null = null;
 let toastTimeout: number | null = null;
+
+// Zoom & Pan Interaction State Variables
+let isPanning = false;
+let isSpaceDown = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartOffsetX = 0;
+let panStartOffsetY = 0;
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
+    isSpaceDown = true;
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") {
+    isSpaceDown = false;
+  }
+});
+
+// Pinch Zoom State Variables (Mobile Multi-touch)
+let isPinching = false;
+let pinchStartDistance = 0;
+let pinchStartZoom = 1.0;
+let pinchCenterScreen = { x: 0, y: 0 };
+let pinchStartPan = { x: 0, y: 0 };
 
 // Perspective Transform State Variables
 let isPerspectiveMode = false;
@@ -523,6 +562,22 @@ async function startAnalysis(): Promise<void> {
 }
 
 /**
+ * キャンバスのズーム・パントランスフォームおよび操作バー表示の適用
+ */
+function applyCanvasTransform(): void {
+  const state = appState.getState();
+  if (state.sourceImage) {
+    renderCanvas.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+    zoomLevelDisplay.textContent = `${Math.round(state.zoom * 100)}%`;
+    btnToggleLineSnap.classList.toggle("active", state.lineSnapEnabled);
+    zoomControls.style.display = "flex";
+  } else {
+    renderCanvas.style.transform = "";
+    zoomControls.style.display = "none";
+  }
+}
+
+/**
  * Canvas描画の更新
  */
 function updateCanvasRender(): void {
@@ -530,11 +585,13 @@ function updateCanvasRender(): void {
   if (!state.sourceImage) {
     emptyDropZone.style.display = "flex";
     renderCanvas.style.display = "none";
+    applyCanvasTransform();
     return;
   }
 
   emptyDropZone.style.display = "none";
   renderCanvas.style.display = "block";
+  applyCanvasTransform();
 
   const ctx = renderCanvas.getContext("2d");
   if (!ctx) return;
@@ -563,19 +620,38 @@ function updateCanvasRender(): void {
     false
   );
 
+  // 描画モード中の行ガイド描画（拡大率に応じて見やすさを自動調整）
+  if (state.mode === "draw" && lastOcrResult && lastOcrResult.lines.length > 0) {
+    renderLineGuides(
+      ctx,
+      lastOcrResult.lines,
+      activeSnappedLine,
+      state.zoom,
+      currentDetectedDeskewAngle
+    );
+  }
+
   // 手動ドラッグ中の矩形プレビュー描画
   if (isDrawing && currentDrawRect) {
     ctx.save();
-    ctx.strokeStyle = "#10b981";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
+    if (currentSnapResult && currentSnapResult.rotation && Math.abs(currentSnapResult.rotation) > 0.1) {
+      const cx = currentDrawRect.x + currentDrawRect.width / 2;
+      const cy = currentDrawRect.y + currentDrawRect.height / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate((currentSnapResult.rotation * Math.PI) / 180);
+      ctx.translate(-cx, -cy);
+    }
+    const isSnapped = currentSnapResult?.isSnapped;
+    ctx.strokeStyle = isSnapped ? "#10b981" : "#38bdf8";
+    ctx.lineWidth = Math.max(1.5, 2.5 / Math.max(0.5, state.zoom));
+    ctx.setLineDash(isSnapped ? [4, 2] : [6, 4]);
     ctx.strokeRect(
       currentDrawRect.x,
       currentDrawRect.y,
       currentDrawRect.width,
       currentDrawRect.height
     );
-    ctx.fillStyle = "rgba(16, 185, 129, 0.25)";
+    ctx.fillStyle = isSnapped ? "rgba(16, 185, 129, 0.35)" : "rgba(56, 189, 248, 0.25)";
     ctx.fillRect(
       currentDrawRect.x,
       currentDrawRect.y,
@@ -1309,6 +1385,51 @@ function initEvents(): void {
   });
 
   // ==========================================
+  // Zoom & Snap Controls Events
+  // ==========================================
+
+  btnToggleLineSnap.addEventListener("click", () => {
+    appState.toggleLineSnap();
+    applyCanvasTransform();
+    const isEnabled = appState.getState().lineSnapEnabled;
+    showToast(isEnabled ? "🧲 行スナップを有効にしました（行に合わせて自動吸着）" : "行スナップを無効にしました（自由矩形）");
+  });
+
+  btnZoomIn.addEventListener("click", () => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+    appState.setZoom(state.zoom * 1.25);
+    applyCanvasTransform();
+  });
+
+  btnZoomOut.addEventListener("click", () => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+    appState.setZoom(state.zoom / 1.25);
+    applyCanvasTransform();
+  });
+
+  btnZoomReset.addEventListener("click", () => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+    // 100% と 200%（または全体）をトグル
+    if (Math.abs(state.zoom - 1.0) < 0.1) {
+      appState.setZoom(2.0);
+    } else {
+      appState.setZoom(1.0);
+    }
+    applyCanvasTransform();
+  });
+
+  btnZoomFit.addEventListener("click", () => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+    appState.resetZoomPan();
+    applyCanvasTransform();
+    showToast("全体表示・位置をリセットしました");
+  });
+
+  // ==========================================
   // Canvas Mouse & Touch Interactions
   // ==========================================
 
@@ -1339,7 +1460,28 @@ function initEvents(): void {
     return "bottomLeft";
   }
 
-  // マウス移動（ホバー検出・ピンドラッグ）
+  // マウスホイールによるズーム（カーソル位置中心）
+  canvasViewport.addEventListener("wheel", (e) => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+    e.preventDefault();
+
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+    const newZoom = Math.max(0.4, Math.min(5.0, state.zoom * zoomFactor));
+    if (Math.abs(newZoom - state.zoom) < 0.001) return;
+
+    const viewportRect = canvasViewport.getBoundingClientRect();
+    const mouseX = e.clientX - (viewportRect.left + viewportRect.width / 2);
+    const mouseY = e.clientY - (viewportRect.top + viewportRect.height / 2);
+    const ratio = newZoom / state.zoom;
+    const newPanX = mouseX - (mouseX - state.panX) * ratio;
+    const newPanY = mouseY - (mouseY - state.panY) * ratio;
+
+    appState.setZoomAndPan(newZoom, newPanX, newPanY);
+    applyCanvasTransform();
+  }, { passive: false });
+
+  // マウス移動（ホバー検出・ピンドラッグ・パンドラッグ）
   renderCanvas.addEventListener("mousemove", (e) => {
     const state = appState.getState();
     if (!state.sourceImage) return;
@@ -1357,7 +1499,7 @@ function initEvents(): void {
       return;
     }
 
-    if (isDrawing) return;
+    if (isDrawing || isPanning) return;
 
     const { x, y } = getCanvasCoordinates(e);
     const box = findBoxAtPosition(state.boxes, x, y);
@@ -1368,7 +1510,7 @@ function initEvents(): void {
         updateCanvasRender();
       }
     } else {
-      renderCanvas.style.cursor = state.mode === "select" ? "default" : "crosshair";
+      renderCanvas.style.cursor = state.mode === "select" ? "grab" : "crosshair";
       if (state.rendererOptions.activeHoverBoxId !== null) {
         appState.setRendererOptions({ activeHoverBoxId: null });
         updateCanvasRender();
@@ -1376,21 +1518,38 @@ function initEvents(): void {
     }
   });
 
-  // マウスダウン（クリックまたはドラッグ開始）
+  // マウスダウン（クリック・描画開始・パン開始）
   renderCanvas.addEventListener("mousedown", (e) => {
     const state = appState.getState();
-    if (!state.sourceImage || e.button !== 0) return;
+    if (!state.sourceImage) return;
 
     // 台形補正モード
     if (isPerspectiveMode && perspectiveCorners) {
-      const corner = findNearestCorner(perspectiveCorners, e.clientX, e.clientY);
-      if (corner) {
-        activeCornerKey = corner;
-        renderCanvas.style.cursor = "grabbing";
-        updateCanvasRender(); // 即座に虫眼鏡を表示
+      if (e.button === 0) {
+        const corner = findNearestCorner(perspectiveCorners, e.clientX, e.clientY);
+        if (corner) {
+          activeCornerKey = corner;
+          renderCanvas.style.cursor = "grabbing";
+          updateCanvasRender(); // 虫眼鏡を表示
+        }
       }
       return;
     }
+
+    // 中クリック、またはスペースキー押下中の左クリックは常にパン移動
+    if (e.button === 1 || (e.button === 0 && isSpaceDown)) {
+      e.preventDefault();
+      isPanning = true;
+      panStartX = e.clientX;
+      panStartY = e.clientY;
+      panStartOffsetX = state.panX;
+      panStartOffsetY = state.panY;
+      renderCanvas.classList.add("is-interacting");
+      renderCanvas.style.cursor = "grabbing";
+      return;
+    }
+
+    if (e.button !== 0) return;
 
     const { x, y } = getCanvasCoordinates(e);
 
@@ -1399,16 +1558,41 @@ function initEvents(): void {
       if (box) {
         appState.toggleBox(box.id);
         showToast(box.enabled ? "保護を解除しました" : "保護を再適用しました");
+      } else {
+        // ボックス外をクリック＆ドラッグした場合はパン移動を開始
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        panStartOffsetX = state.panX;
+        panStartOffsetY = state.panY;
+        renderCanvas.classList.add("is-interacting");
+        renderCanvas.style.cursor = "grabbing";
       }
     } else if (state.mode === "draw") {
       isDrawing = true;
       drawStartX = x;
       drawStartY = y;
-      currentDrawRect = { x, y, width: 0, height: 0 };
+      currentSnapResult = null;
+      activeSnappedLine = null;
+
+      if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
+        const snap = calculateLineSnap(
+          lastOcrResult.lines,
+          { x, y },
+          { x, y },
+          { globalAngle: currentDetectedDeskewAngle }
+        );
+        currentSnapResult = snap;
+        activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
+        currentDrawRect = snap.rect;
+      } else {
+        currentDrawRect = { x, y, width: 0, height: 0 };
+      }
+      updateCanvasRender();
     }
   });
 
-  // マウスドラッグ中
+  // マウスドラッグ中（画面外に出てもの追従）
   window.addEventListener("mousemove", (e) => {
     if (isPerspectiveMode && perspectiveCorners && activeCornerKey) {
       const { x, y } = getCanvasCoordinates(e);
@@ -1417,15 +1601,38 @@ function initEvents(): void {
       return;
     }
 
+    if (isPanning) {
+      const dx = e.clientX - panStartX;
+      const dy = e.clientY - panStartY;
+      appState.setPan(panStartOffsetX + dx, panStartOffsetY + dy);
+      applyCanvasTransform();
+      return;
+    }
+
     if (!isDrawing) return;
     const { x, y } = getCanvasCoordinates(e);
+    const state = appState.getState();
 
-    const minX = Math.min(drawStartX, x);
-    const minY = Math.min(drawStartY, y);
-    const width = Math.abs(x - drawStartX);
-    const height = Math.abs(y - drawStartY);
+    if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
+      const snap = calculateLineSnap(
+        lastOcrResult.lines,
+        { x: drawStartX, y: drawStartY },
+        { x, y },
+        { globalAngle: currentDetectedDeskewAngle }
+      );
+      currentSnapResult = snap;
+      activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
+      currentDrawRect = snap.rect;
+    } else {
+      const minX = Math.min(drawStartX, x);
+      const minY = Math.min(drawStartY, y);
+      const width = Math.abs(x - drawStartX);
+      const height = Math.abs(y - drawStartY);
+      currentDrawRect = { x: minX, y: minY, width, height };
+      currentSnapResult = null;
+      activeSnappedLine = null;
+    }
 
-    currentDrawRect = { x: minX, y: minY, width, height };
     updateCanvasRender();
   });
 
@@ -1440,31 +1647,68 @@ function initEvents(): void {
       return;
     }
 
+    if (isPanning) {
+      isPanning = false;
+      renderCanvas.classList.remove("is-interacting");
+      renderCanvas.style.cursor = appState.getState().mode === "select" ? "default" : "crosshair";
+    }
+
     if (!isDrawing) return;
     isDrawing = false;
 
     if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
-      const rot = toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined;
+      const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
       appState.addManualBox(currentDrawRect, rot);
-      showToast("手動黒塗りを追加しました");
+      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "手動黒塗りを追加しました");
     }
 
     currentDrawRect = null;
+    currentSnapResult = null;
+    activeSnappedLine = null;
     updateCanvasRender();
   });
 
-  // タッチ操作（スマホ対応）
+  // タッチ操作（スマホ対応：ピンチズーム・パン・行スナップ描画）
   renderCanvas.addEventListener("touchstart", (e) => {
+    const state = appState.getState();
+    if (!state.sourceImage) return;
+
+    // 2本指ピンチ操作開始（モードに関わらず常にズーム＆パン）
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      isPinching = true;
+      isDrawing = false;
+      isPanning = false;
+      currentDrawRect = null;
+      activeSnappedLine = null;
+      currentSnapResult = null;
+
+      pinchStartDistance = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      pinchStartZoom = state.zoom;
+      pinchStartPan = { x: state.panX, y: state.panY };
+      pinchCenterScreen = {
+        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+      };
+      renderCanvas.classList.add("is-interacting");
+      updateCanvasRender();
+      return;
+    }
+
+    // 1本指操作
     if (e.touches.length === 1) {
       const touch = e.touches[0];
-      const state = appState.getState();
 
+      // 台形補正モード中のピン操作
       if (isPerspectiveMode && perspectiveCorners) {
         const corner = findNearestCorner(perspectiveCorners, touch.clientX, touch.clientY);
         if (corner) {
           e.preventDefault();
           activeCornerKey = corner;
-          updateCanvasRender(); // 即座に虫眼鏡を表示
+          updateCanvasRender(); // 虫眼鏡を表示
         }
         return;
       }
@@ -1477,42 +1721,122 @@ function initEvents(): void {
           e.preventDefault();
           appState.toggleBox(box.id);
           showToast(box.enabled ? "保護を解除しました" : "保護を再適用しました");
+        } else {
+          // 何もない場所をドラッグした場合はパン移動
+          isPanning = true;
+          panStartX = touch.clientX;
+          panStartY = touch.clientY;
+          panStartOffsetX = state.panX;
+          panStartOffsetY = state.panY;
+          renderCanvas.classList.add("is-interacting");
         }
       } else if (state.mode === "draw") {
         e.preventDefault();
         isDrawing = true;
         drawStartX = x;
         drawStartY = y;
-        currentDrawRect = { x, y, width: 0, height: 0 };
+        currentSnapResult = null;
+        activeSnappedLine = null;
+
+        if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
+          const snap = calculateLineSnap(
+            lastOcrResult.lines,
+            { x, y },
+            { x, y },
+            { globalAngle: currentDetectedDeskewAngle }
+          );
+          currentSnapResult = snap;
+          activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
+          currentDrawRect = snap.rect;
+        } else {
+          currentDrawRect = { x, y, width: 0, height: 0 };
+        }
+        updateCanvasRender();
       }
     }
   }, { passive: false });
 
   renderCanvas.addEventListener("touchmove", (e) => {
+    // 2本指ピンチ操作中
+    if (isPinching && e.touches.length === 2) {
+      e.preventDefault();
+      const currentDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const scale = currentDist / (pinchStartDistance || 1);
+      const newZoom = Math.max(0.4, Math.min(5.0, pinchStartZoom * scale));
+
+      const currentCenter = {
+        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+      };
+      const panX = pinchStartPan.x + (currentCenter.x - pinchCenterScreen.x);
+      const panY = pinchStartPan.y + (currentCenter.y - pinchCenterScreen.y);
+
+      appState.setZoomAndPan(newZoom, panX, panY);
+      applyCanvasTransform();
+      return;
+    }
+
     if (e.touches.length !== 1) return;
     const touch = e.touches[0];
-    const { x, y } = getCanvasCoordinates(touch);
 
+    // 台形ピン移動
     if (isPerspectiveMode && perspectiveCorners && activeCornerKey) {
       e.preventDefault();
+      const { x, y } = getCanvasCoordinates(touch);
       perspectiveCorners[activeCornerKey] = { x, y };
       updateCanvasRender();
       return;
     }
 
+    // 1本指パン移動
+    if (isPanning) {
+      e.preventDefault();
+      const dx = touch.clientX - panStartX;
+      const dy = touch.clientY - panStartY;
+      appState.setPan(panStartOffsetX + dx, panStartOffsetY + dy);
+      applyCanvasTransform();
+      return;
+    }
+
+    // 1本指描画（行スナップ）
     if (!isDrawing) return;
     e.preventDefault();
 
-    const minX = Math.min(drawStartX, x);
-    const minY = Math.min(drawStartY, y);
-    const width = Math.abs(x - drawStartX);
-    const height = Math.abs(y - drawStartY);
+    const { x, y } = getCanvasCoordinates(touch);
+    const state = appState.getState();
 
-    currentDrawRect = { x: minX, y: minY, width, height };
+    if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
+      const snap = calculateLineSnap(
+        lastOcrResult.lines,
+        { x: drawStartX, y: drawStartY },
+        { x, y },
+        { globalAngle: currentDetectedDeskewAngle }
+      );
+      currentSnapResult = snap;
+      activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
+      currentDrawRect = snap.rect;
+    } else {
+      const minX = Math.min(drawStartX, x);
+      const minY = Math.min(drawStartY, y);
+      const width = Math.abs(x - drawStartX);
+      const height = Math.abs(y - drawStartY);
+      currentDrawRect = { x: minX, y: minY, width, height };
+      currentSnapResult = null;
+      activeSnappedLine = null;
+    }
+
     updateCanvasRender();
   }, { passive: false });
 
   renderCanvas.addEventListener("touchend", () => {
+    if (isPinching) {
+      isPinching = false;
+      renderCanvas.classList.remove("is-interacting");
+    }
+
     if (isPerspectiveMode) {
       if (activeCornerKey) {
         activeCornerKey = null;
@@ -1521,16 +1845,23 @@ function initEvents(): void {
       return;
     }
 
+    if (isPanning) {
+      isPanning = false;
+      renderCanvas.classList.remove("is-interacting");
+    }
+
     if (!isDrawing) return;
     isDrawing = false;
 
     if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
-      const rot = toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined;
+      const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
       appState.addManualBox(currentDrawRect, rot);
-      showToast("手動黒塗りを追加しました");
+      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "手動黒塗りを追加しました");
     }
 
     currentDrawRect = null;
+    currentSnapResult = null;
+    activeSnappedLine = null;
     updateCanvasRender();
   });
 }

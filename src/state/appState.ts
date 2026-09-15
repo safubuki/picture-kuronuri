@@ -16,6 +16,9 @@ export interface AppState {
   progressPercent: number;
   isComparing: boolean;
   zoom: number;
+  panX: number;
+  panY: number;
+  lineSnapEnabled: boolean;
 }
 
 export const initialState: AppState = {
@@ -30,7 +33,10 @@ export const initialState: AppState = {
   progressText: "",
   progressPercent: 0,
   isComparing: false,
-  zoom: 1.0
+  zoom: 1.0,
+  panX: 0,
+  panY: 0,
+  lineSnapEnabled: true
 };
 
 export class StateManager {
@@ -64,6 +70,9 @@ export class StateManager {
     this.state.boxes = [];
     this.state.history = [];
     this.state.historyIndex = -1;
+    this.state.zoom = 1.0;
+    this.state.panX = 0;
+    this.state.panY = 0;
     this.notify();
   }
 
@@ -144,7 +153,37 @@ export class StateManager {
   }
 
   public setZoom(zoom: number): void {
-    this.state.zoom = Math.max(0.2, Math.min(3.0, zoom));
+    this.state.zoom = Math.max(0.4, Math.min(5.0, zoom));
+    this.notify();
+  }
+
+  public setPan(panX: number, panY: number): void {
+    this.state.panX = panX;
+    this.state.panY = panY;
+    this.notify();
+  }
+
+  public setZoomAndPan(zoom: number, panX: number, panY: number): void {
+    this.state.zoom = Math.max(0.4, Math.min(5.0, zoom));
+    this.state.panX = panX;
+    this.state.panY = panY;
+    this.notify();
+  }
+
+  public resetZoomPan(): void {
+    this.state.zoom = 1.0;
+    this.state.panX = 0;
+    this.state.panY = 0;
+    this.notify();
+  }
+
+  public setLineSnapEnabled(enabled: boolean): void {
+    this.state.lineSnapEnabled = enabled;
+    this.notify();
+  }
+
+  public toggleLineSnap(): void {
+    this.state.lineSnapEnabled = !this.state.lineSnapEnabled;
     this.notify();
   }
 

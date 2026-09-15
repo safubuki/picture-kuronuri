@@ -157,6 +157,27 @@
           <!-- Main Interactive Canvas -->
           <canvas id="renderCanvas" style="display: none;"></canvas>
 
+          <!-- Floating Zoom & Line Snap Controls (Mobile & Desktop) -->
+          <div id="zoomControls" class="zoom-controls" style="display: none;">
+            <button id="btnToggleLineSnap" class="zoom-btn zoom-snap-btn active" title="行スナップ（指でざっくりなぞるだけで行に合わせて綺麗に黒塗り）">
+              <span class="zoom-btn-icon">🧲</span>
+              <span class="zoom-btn-text">行スナップ</span>
+            </button>
+            <div class="zoom-btn-divider"></div>
+            <button id="btnZoomOut" class="zoom-btn" title="縮小" aria-label="縮小">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <button id="btnZoomReset" class="zoom-btn zoom-level-btn" title="タップで100%または全体表示にリセット">
+              <span id="zoomLevelDisplay">100%</span>
+            </button>
+            <button id="btnZoomIn" class="zoom-btn" title="拡大" aria-label="拡大">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <button id="btnZoomFit" class="zoom-btn" title="全体表示にリセット" aria-label="全体表示">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+          </div>
+
           <!-- Analyzing Progress Overlay -->
           <div id="progressOverlay" class="progress-overlay" style="display: none;">
             <div class="spinner"></div>

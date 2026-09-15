@@ -305,3 +305,92 @@ export function findBoxAtPosition(
   }
   return null;
 }
+
+/**
+ * 描画モード時・スナップ時に行ガイドを描画する
+ */
+export function renderLineGuides(
+  ctx: CanvasRenderingContext2D,
+  lines: import("./ocr").OcrLine[],
+  activeLine: import("./ocr").OcrLine | null = null,
+  zoom: number = 1.0,
+  globalAngle: number = 0
+): void {
+  if (!lines || lines.length === 0) return;
+
+  ctx.save();
+
+  // 拡大率に応じて線の太さを調整（拡大時も太くなりすぎない）
+  const lineWidth = Math.max(0.8, 1.2 / Math.max(0.5, zoom));
+
+  // 1. 全認識行の淡いシアンガイド枠
+  for (const line of lines) {
+    if (line === activeLine) continue;
+    const { x0, y0, x1, y1 } = line.bbox;
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w <= 0 || h <= 0) continue;
+
+    ctx.save();
+    if (globalAngle && Math.abs(globalAngle) > 0.1) {
+      const cx = x0 + w / 2;
+      const cy = y0 + h / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate((globalAngle * Math.PI) / 180);
+      ctx.translate(-cx, -cy);
+    }
+
+    ctx.fillStyle = "rgba(56, 189, 248, 0.05)";
+    ctx.fillRect(x0, y0, w, h);
+
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(x0, y0, w, h);
+
+    // 拡大率1.6倍以上のときは単語の区切りガイドも表示
+    if (zoom >= 1.6 && line.words && line.words.length > 1) {
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.25)";
+      ctx.setLineDash([2, 3]);
+      for (const wItem of line.words) {
+        ctx.beginPath();
+        ctx.moveTo(wItem.bbox.x0, y0);
+        ctx.lineTo(wItem.bbox.x0, y1);
+        ctx.moveTo(wItem.bbox.x1, y0);
+        ctx.lineTo(wItem.bbox.x1, y1);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // 2. 現在吸着中のアクティブ行のネオンハイライト
+  if (activeLine) {
+    const { x0, y0, x1, y1 } = activeLine.bbox;
+    const w = x1 - x0;
+    const h = y1 - y0;
+
+    ctx.save();
+    if (globalAngle && Math.abs(globalAngle) > 0.1) {
+      const cx = x0 + w / 2;
+      const cy = y0 + h / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate((globalAngle * Math.PI) / 180);
+      ctx.translate(-cx, -cy);
+    }
+
+    ctx.fillStyle = "rgba(16, 185, 129, 0.18)";
+    ctx.fillRect(x0, y0, w, h);
+
+    ctx.strokeStyle = "#10b981";
+    ctx.lineWidth = Math.max(1.4, 2.2 / Math.max(0.5, zoom));
+    ctx.setLineDash([]);
+    ctx.shadowColor = "rgba(16, 185, 129, 0.5)";
+    ctx.shadowBlur = 6;
+    ctx.strokeRect(x0, y0, w, h);
+
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
