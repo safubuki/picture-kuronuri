@@ -34,10 +34,10 @@ export async function detectFacesAndAvatars(
     for (let i = 0; i < knownAvatars.length; i++) {
       results.push({
         id: `avatar-known-${i}`,
-        type: "face",
+        type: "avatar",
         rect: knownAvatars[i],
         confidence: 0.99,
-        label: "顔写真"
+        label: "アイコン"
       });
     }
     return results;
@@ -72,12 +72,20 @@ export async function detectFacesAndAvatars(
   }
 
   // 3. 実写顔写真（Photo Avatar）の色彩・肌色・テクスチャ解析
-  // ※ 「鈴」「山」などの頭文字アイコンや単色塗りつぶしアイコン、吹き出し境界は除外
   const photoAvatars = detectRealPhotoAvatars(imageElement);
   for (const photo of photoAvatars) {
     const isOverlapped = results.some(r => isOverlap(r.rect, photo.rect, 0.3));
     if (!isOverlapped) {
       results.push(photo);
+    }
+  }
+
+  // 4. チャットアバターアイコン（イニシャル、イラスト、円形シンボル）の幾何・コントラスト解析
+  const circleAvatars = detectCircleAvatars(imageElement);
+  for (const avatar of circleAvatars) {
+    const isOverlapped = results.some(r => isOverlap(r.rect, avatar.rect, 0.3));
+    if (!isOverlapped) {
+      results.push(avatar);
     }
   }
 
@@ -321,3 +329,173 @@ function evaluateRealPhotoFace(
   const score = Math.round(skinRatio * 50 + Math.min(30, stdDev) + Math.min(20, avgContrast));
   return Math.min(95, score);
 }
+
+/**
+ * チャットアバターアイコン（イニシャル、単色円形、イラスト）の検出
+ */
+function detectCircleAvatars(
+  source: HTMLImageElement | HTMLCanvasElement
+): DetectedFaceOrAvatar[] {
+  const results: DetectedFaceOrAvatar[] = [];
+  const width = source.width;
+  const height = source.height;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return [];
+  ctx.drawImage(source, 0, 0);
+
+  const scale = Math.min(1, 800 / Math.max(width, height));
+  const sw = Math.round(width * scale);
+  const sh = Math.round(height * scale);
+  const scaledCanvas = document.createElement("canvas");
+  scaledCanvas.width = sw;
+  scaledCanvas.height = sh;
+  const sctx = scaledCanvas.getContext("2d", { willReadFrequently: true });
+  if (!sctx) return [];
+  sctx.drawImage(canvas, 0, 0, sw, sh);
+
+  const imgData = sctx.getImageData(0, 0, sw, sh);
+  const data = imgData.data;
+
+  // アバター候補サイズ（画面幅の6%〜13%）
+  const sizes = [
+    Math.round(sw * 0.07),
+    Math.round(sw * 0.095),
+    Math.round(sw * 0.12)
+  ].filter((s) => s >= 20);
+
+  // チャットアイコンが存在する左端カラム（X: 3%〜15%）
+  const xs = [0.03, 0.05, 0.07, 0.09, 0.11].map((r) => Math.round(sw * r));
+  const startY = Math.round(sh * 0.08);
+  const endY = Math.round(sh * 0.92);
+
+  interface Candidate {
+    x: number;
+    y: number;
+    size: number;
+    score: number;
+  }
+  const candidates: Candidate[] = [];
+
+  for (const size of sizes) {
+    const stepY = Math.max(10, Math.round(size * 0.35));
+    for (const x of xs) {
+      if (x + size >= sw) continue;
+      for (let y = startY; y < endY - size; y += stepY) {
+        const score = evaluateCircleAvatar(data, sw, sh, x, y, size);
+        if (score >= 65) {
+          candidates.push({ x, y, size, score });
+        }
+      }
+    }
+  }
+
+  // スコア順にソートして重複排除
+  candidates.sort((a, b) => b.score - a.score);
+
+  for (const c of candidates) {
+    const origRect = {
+      x: Math.round(c.x / scale),
+      y: Math.round(c.y / scale),
+      width: Math.round(c.size / scale),
+      height: Math.round(c.size / scale)
+    };
+
+    const isDup = results.some((r) => {
+      if (isOverlap(r.rect, origRect, 0.3)) return true;
+      const sameCol = Math.abs(r.rect.x - origRect.x) < origRect.width * 0.8;
+      const closeY = Math.abs(r.rect.y - origRect.y) < origRect.height * 1.5;
+      return sameCol && closeY;
+    });
+
+    if (!isDup) {
+      results.push({
+        id: `avatar-circle-${origRect.x}-${origRect.y}`,
+        type: "avatar",
+        rect: origRect,
+        confidence: Math.min(0.95, c.score / 100),
+        label: "アイコン"
+      });
+    }
+
+    if (results.length >= 8) break;
+  }
+
+  return results;
+}
+
+/**
+ * 領域が円形チャットアイコン（イニシャル・イラスト・記号）であるかを判定
+ */
+function evaluateCircleAvatar(
+  rgba: Uint8ClampedArray,
+  sw: number,
+  sh: number,
+  x: number,
+  y: number,
+  size: number
+): number {
+  if (x + size >= sw || y + size >= sh) return 0;
+
+  const half = Math.floor(size / 2);
+  const cx = x + half;
+  const cy = y + half;
+  const innerR = half * 0.78;
+  const innerR2 = innerR * innerR;
+
+  let innerRSum = 0;
+  let innerGSum = 0;
+  let innerBSum = 0;
+  let innerCount = 0;
+
+  for (let dy = -Math.floor(innerR); dy <= Math.floor(innerR); dy++) {
+    for (let dx = -Math.floor(innerR); dx <= Math.floor(innerR); dx++) {
+      if (dx * dx + dy * dy > innerR2) continue;
+      const px = cx + dx;
+      const py = cy + dy;
+      if (px < 0 || px >= sw || py < 0 || py >= sh) continue;
+      const idx = (py * sw + px) * 4;
+      innerRSum += rgba[idx];
+      innerGSum += rgba[idx + 1];
+      innerBSum += rgba[idx + 2];
+      innerCount++;
+    }
+  }
+
+  if (innerCount < 30) return 0;
+
+  const avgInnerLum = (0.299 * innerRSum + 0.587 * innerGSum + 0.114 * innerBSum) / innerCount;
+
+  // 16方向の円周外枠コントラスト検査
+  const rOuter = half * 1.25;
+  let validEdgeCount = 0;
+  let totalEdgeContrast = 0;
+  const sampleAngles = 16;
+
+  for (let a = 0; a < sampleAngles; a++) {
+    const rad = (a / sampleAngles) * Math.PI * 2;
+    const xOut = Math.round(cx + Math.cos(rad) * rOuter);
+    const yOut = Math.round(cy + Math.sin(rad) * rOuter);
+    if (xOut < 0 || yOut < 0 || xOut >= sw || yOut >= sh) continue;
+
+    const idxOut = (yOut * sw + xOut) * 4;
+    const lumOut = 0.299 * rgba[idxOut] + 0.587 * rgba[idxOut + 1] + 0.114 * rgba[idxOut + 2];
+    const diff = Math.abs(lumOut - avgInnerLum);
+
+    if (diff >= 14) {
+      validEdgeCount++;
+      totalEdgeContrast += diff;
+    }
+  }
+
+  // 16方向中、10方向以上で明確なエッジがあれば円形形状とみなす
+  if (validEdgeCount < 10) return 0;
+
+  const avgContrast = totalEdgeContrast / validEdgeCount;
+  const score = Math.round((validEdgeCount / sampleAngles) * 60 + Math.min(35, avgContrast));
+  return Math.min(95, score);
+}
+
