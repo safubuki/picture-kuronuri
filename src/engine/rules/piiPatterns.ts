@@ -38,21 +38,21 @@ function detectLabeledValues(text: string): PiiMatch[] {
   const results: PiiMatch[] = [];
   const rules: { re: RegExp; category: PiiMatch["category"]; label: string }[] = [
     // コロンの欠落・スペース混入・大文字小文字に対応
-    { re: /(?:Email|E-?mail|メール(?:アドレス)?)\s*[:：\s]\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9.-]+(?:\.[a-zA-Z]{2,})?)/iu, category: "email", label: "メールアドレス" },
-    { re: /(?:TEL|Tel|電話(?:番号)?)\s*[:：\s]\s*([0-9０-９\-ー−–‐・･\s]{8,15})/iu, category: "phone", label: "電話番号" },
-    { re: /(?:住所|Address)\s*[:：\s]?\s*([^、。\n\r]{4,30})/iu, category: "address", label: "住所" }
+    { re: /(?:Email|E-?mail|メール(?:アドレス)?)\s*[:：\s]\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9.-]+)/iu, category: "email", label: "メールアドレス" },
+    { re: /(?:TEL|Tel|電話(?:番号)?)\s*[:：\s]\s*([0-9０-９\-ー−–‐・･\s]{8,22})/iu, category: "phone", label: "電話番号" },
+    { re: /(?:住所|Address)\s*[:：\s]?\s*([^、。\n\r]{4,45})/iu, category: "address", label: "住所" }
   ];
   for (const rule of rules) {
     const m = rule.re.exec(text);
     if (!m || !m[1]) continue;
-    const value = m[1].trim();
+    const value = m[1].trimEnd();
     if (value.length < 3) continue;
     const startIndex = text.indexOf(m[1], m.index);
     if (startIndex < 0) continue;
     results.push({
       matchedText: value,
       startIndex,
-      endIndex: startIndex + m[1].length,
+      endIndex: startIndex + value.length,
       category: rule.category,
       label: rule.label
     });

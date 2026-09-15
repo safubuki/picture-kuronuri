@@ -398,8 +398,17 @@ function calculateBBoxForRange(
   let resultBox: { x: number; y: number; width: number; height: number } | null = null;
 
   if (targetText && symbolsToSearch && symbolsToSearch.length > 0) {
-    const symTexts = symbolsToSearch.map((s) => (s.text || "").replace(/[\s\t\u3000]/g, ""));
-    const fullSymStr = symTexts.join("");
+    // symbolsToSearch 内の各文字について、空白を除いた文字インデックスマップを作成
+    const symIndexMap: number[] = [];
+    let fullSymStr = "";
+    for (let i = 0; i < symbolsToSearch.length; i++) {
+      const cleanChar = (symbolsToSearch[i].text || "").replace(/[\s\t\u3000]/g, "");
+      for (let c = 0; c < cleanChar.length; c++) {
+        symIndexMap.push(i);
+        fullSymStr += cleanChar[c];
+      }
+    }
+
     let matchIdx = fullSymStr.indexOf(targetText);
 
     // 完全一致しない場合、末尾側（例:「田様」）や先頭側で部分一致を試行
@@ -411,8 +420,10 @@ function calculateBBoxForRange(
       }
     }
 
-    if (matchIdx !== -1) {
-      const matchedSlice = symbolsToSearch.slice(matchIdx, matchIdx + targetText.length);
+    if (matchIdx !== -1 && matchIdx + targetText.length <= symIndexMap.length) {
+      const symStartIdx = symIndexMap[matchIdx];
+      const symEndIdx = symIndexMap[matchIdx + targetText.length - 1]; // 末尾文字の正確なインデックス (inclusive)
+      const matchedSlice = symbolsToSearch.slice(symStartIdx, symEndIdx + 1);
       resultBox = bboxFromSymbols(matchedSlice, 0, matchedSlice.length);
     }
   }
@@ -490,10 +501,10 @@ function applyPadding(
   maxHeight: number,
   _expandForPhoto: boolean = false
 ): { x: number; y: number; width: number; height: number } {
-  // 黒塗りを細くスタイリッシュに保つため、上下は0〜1pxに厳格制限（行間を潰さず文字にフィット）
-  const padY = Math.min(1, Math.max(0, padding));
-  // 左右は文字末尾が見切れないよう適度に1〜2px
-  const padX = Math.min(2, Math.max(1, padding));
+  // 上下は行間を巻き込まないよう最小限（0〜2px程度）
+  const padY = Math.min(2, Math.max(0, Math.round(padding * 0.4)));
+  // 左右は文字の末尾やフォントのハネが漏れないよう十分にカバー（デフォルト+2px設定で3〜4px）
+  const padX = Math.max(2, padding + 1);
 
   const x = Math.max(0, rect.x - padX);
   const y = Math.max(0, rect.y - padY);
