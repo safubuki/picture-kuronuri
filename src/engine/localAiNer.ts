@@ -82,7 +82,8 @@ export async function getLocalAiNerPipeline(
  */
 export async function extractEntitiesWithLocalAi(
   text: string,
-  onProgress?: AiLoadProgressCallback
+  onProgress?: AiLoadProgressCallback,
+  minScore: number = 0.5
 ): Promise<ExtractedEntity[]> {
   if (!text || text.trim().length === 0) return [];
 
@@ -122,8 +123,8 @@ export async function extractEntitiesWithLocalAi(
       const start: number = typeof item.start === "number" ? item.start : text.indexOf(word);
       const end: number = typeof item.end === "number" ? item.end : start + word.length;
 
-      // 信頼度閾値（低すぎるものは除外）
-      if (score < 0.5) continue;
+      // 信頼度閾値（動的しきい値で低すぎるものを除外）
+      if (score < minScore) continue;
 
       let type: "person" | "company" | "location" | null = null;
       if (entityTag.includes("PER")) type = "person";

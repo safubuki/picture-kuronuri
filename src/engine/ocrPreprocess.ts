@@ -197,7 +197,7 @@ function computeScale(
   }
 
   const workPixels = origW * scale * origH * scale;
-  const maxPixels = smallText ? 7_500_000 : 5_000_000;
+  const maxPixels = smallText ? 3_000_000 : 2_250_000;
   if (workPixels > maxPixels) {
     scale *= Math.sqrt(maxPixels / workPixels);
   }

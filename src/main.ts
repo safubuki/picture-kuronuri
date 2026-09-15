@@ -90,6 +90,8 @@ const togglePii = document.getElementById("togglePii") as HTMLInputElement;
 const toggleFollowSlope = document.getElementById("toggleFollowSlope") as HTMLInputElement;
 const sliderPadding = document.getElementById("sliderPadding") as HTMLInputElement;
 const paddingValDisplay = document.getElementById("paddingValDisplay") as HTMLSpanElement;
+const sliderAiConfidence = document.getElementById("sliderAiConfidence") as HTMLInputElement;
+const aiConfidenceValDisplay = document.getElementById("aiConfidenceValDisplay") as HTMLSpanElement;
 const btnReanalyze = document.getElementById("btnReanalyze") as HTMLButtonElement;
 
 const inputCustomKeyword = document.getElementById("inputCustomKeyword") as HTMLInputElement;
@@ -1168,6 +1170,30 @@ function initEvents(): void {
     paddingValDisplay.textContent = `+${val} px`;
     appState.setFilterOptions({ padding: val });
   });
+  sliderPadding.addEventListener("change", () => {
+    if (appState.getState().sourceImage) {
+      startAnalysis();
+    }
+  });
+
+  // 端末内AI 判定感度スライダー
+  if (sliderAiConfidence && aiConfidenceValDisplay) {
+    sliderAiConfidence.addEventListener("input", () => {
+      const val = parseInt(sliderAiConfidence.value, 10);
+      let label = `${val}%`;
+      if (val <= 35) label = `高感度 (${val}%) - 漏れ防止`;
+      else if (val >= 70) label = `厳格 (${val}%) - 確実重視`;
+      else label = `標準 (${val}%)`;
+      aiConfidenceValDisplay.textContent = label;
+      appState.setFilterOptions({ aiConfidenceThreshold: val / 100 });
+    });
+
+    sliderAiConfidence.addEventListener("change", () => {
+      if (appState.getState().sourceImage) {
+        startAnalysis();
+      }
+    });
+  }
 
   // カスタムキーワード追加
   const addKeywordAction = () => {

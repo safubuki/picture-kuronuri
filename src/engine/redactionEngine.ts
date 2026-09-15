@@ -41,6 +41,7 @@ export interface RedactionFilterOptions {
   detectPii: boolean;
   customKeywords: string[];
   padding: number; // 安全マージン (px)
+  aiConfidenceThreshold?: number; // AI判定感度しきい値 (0.3〜0.85, デフォルト: 0.5)
 }
 
 export const DEFAULT_FILTER_OPTIONS: RedactionFilterOptions = {
@@ -50,7 +51,8 @@ export const DEFAULT_FILTER_OPTIONS: RedactionFilterOptions = {
   detectCompanies: true,
   detectPii: true,
   customKeywords: [],
-  padding: 2
+  padding: 2,
+  aiConfidenceThreshold: 0.5
 };
 
 /**
@@ -113,27 +115,31 @@ export async function analyzeImageForRedaction(
   const fullText = ocrResult.lines.map(l => l.text).join("\n");
   if (fullText.trim().length > 0) {
     try {
-      const aiEntities = await extractEntitiesWithLocalAi(fullText, (status, p) => {
-        onProgress?.({ status, progress: 0.85 + p * 0.08 });
-      });
+      const aiEntities = await extractEntitiesWithLocalAi(
+        fullText,
+        (status, p) => {
+          onProgress?.({ status, progress: 0.85 + p * 0.08 });
+        },
+        options.aiConfidenceThreshold ?? 0.5
+      );
 
       for (const entity of aiEntities) {
         if (entity.type === "person" && !options.detectPersons) continue;
         if (entity.type === "company" && !options.detectCompanies) continue;
         if (entity.type === "location" && !options.detectPii) continue;
 
-        // 各行をスキャンしてエンティティの文字座標を特定
+        // 各行をスキャンしてファジーマッピングでエンティティの文字座標を特定
         for (const line of ocrResult.lines) {
-          const idx = line.text.indexOf(entity.text);
-          if (idx !== -1) {
-            const rect = calculateBBoxForRange(line, idx, idx + entity.text.length);
+          const matches = findEntityInLineWithFuzzy(line.text, entity.text);
+          for (const m of matches) {
+            const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
             if (rect) {
               const label = entity.type === "person" ? "人名 (AI)" : entity.type === "company" ? "会社名 (AI)" : "住所 (AI)";
               boxes.push({
-                id: `ai-${entity.type}-${line.bbox.x0}-${idx}`,
+                id: `ai-${entity.type}-${line.bbox.x0}-${m.startIndex}`,
                 type: entity.type === "location" ? "pii" : entity.type,
                 label,
-                text: entity.text,
+                text: m.matchedText,
                 reason: `端末内AI文脈認識 (${Math.round(entity.score * 100)}%)`,
                 rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
                 enabled: true,
@@ -327,6 +333,54 @@ function bboxFromSymbols(
     width: maxX - minX,
     height: Math.max(1, maxY - minY)
   };
+}
+
+interface FuzzyMatchResult {
+  startIndex: number;
+  endIndex: number;
+  matchedText: string;
+}
+
+/**
+ * OCRテキスト行の中から、スペースや記号混じり、表記揺れを吸収してエンティティの文字位置を特定
+ */
+function findEntityInLineWithFuzzy(lineText: string, entityText: string): FuzzyMatchResult[] {
+  const results: FuzzyMatchResult[] = [];
+  if (!lineText || !entityText) return results;
+
+  const cleanEntity = entityText.replace(/[\s\t\r\n\u3000]/g, "");
+  if (cleanEntity.length === 0) return results;
+
+  // lineText の各文字について、空白を除いた文字インデックスマップを作成
+  const mapping: number[] = [];
+  let cleanLine = "";
+  for (let i = 0; i < lineText.length; i++) {
+    const ch = lineText[i];
+    if (!/[\s\t\r\n\u3000]/.test(ch)) {
+      mapping.push(i);
+      cleanLine += ch;
+    }
+  }
+
+  let searchPos = 0;
+  while (searchPos < cleanLine.length) {
+    const foundPos = cleanLine.indexOf(cleanEntity, searchPos);
+    if (foundPos === -1) break;
+
+    const startOriginal = mapping[foundPos];
+    const endClean = foundPos + cleanEntity.length - 1;
+    const endOriginal = mapping[endClean] + 1; // inclusive -> exclusive
+
+    results.push({
+      startIndex: startOriginal,
+      endIndex: endOriginal,
+      matchedText: lineText.slice(startOriginal, endOriginal)
+    });
+
+    searchPos = foundPos + 1;
+  }
+
+  return results;
 }
 
 function calculateBBoxForRange(

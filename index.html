@@ -376,6 +376,21 @@
             <span class="setting-desc">文字の端が読めてしまわないよう少し広めに黒塗りします</span>
           </div>
 
+          <!-- Local AI Confidence Slider -->
+          <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid rgba(255, 255, 255, 0.04);">
+            <div style="display: flex; justify-content: space-between; width: 100%;">
+              <span class="setting-name" style="display: flex; align-items: center; gap: 0.35rem;">
+                <span>🤖 端末内AI 判定感度</span>
+                <span style="font-size: 0.68rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 1px 5px; border-radius: 4px;">完全ローカル</span>
+              </span>
+              <span id="aiConfidenceValDisplay" class="range-value">標準 (50%)</span>
+            </div>
+            <div class="range-container">
+              <input type="range" id="sliderAiConfidence" class="range-input" min="30" max="85" value="50" step="5">
+            </div>
+            <span class="setting-desc">左（30%）に寄せると文脈から疑わしい箇所を余さず拾い、右（85%）に寄せると確実な人名・組織のみに絞り込みます</span>
+          </div>
+
           <!-- Custom Keywords -->
           <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 0.85rem;">
             <span class="setting-name">カスタム指定単語</span>
