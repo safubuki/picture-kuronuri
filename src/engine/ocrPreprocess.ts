@@ -166,17 +166,18 @@ function computeScale(
     scale = TARGET_LINE_HEIGHT / analysis.estimatedLineHeight;
   } else {
     const minSide = Math.min(origW, origH);
-    scale = minSide < 900 ? 2.2 : minSide < 1400 ? 1.5 : 1.0;
+    scale = minSide < 900 ? 2.4 : minSide < 1400 ? 1.6 : 1.1;
   }
 
-  if (analysis.isLikelyScreenPhoto && scale < 1.35 && analysis.estimatedLineHeight < 28) {
-    scale = Math.max(scale, 1.6);
+  if (analysis.isLikelyScreenPhoto && scale < 1.4 && analysis.estimatedLineHeight < 28) {
+    scale = Math.max(scale, 1.8);
   }
 
   const smallText =
-    analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 22;
+    analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 24;
   if (smallText) {
-    scale = Math.max(scale, Math.min(MAX_SCALE, 24 / analysis.estimatedLineHeight));
+    // 小さい文字は最低でも文字高30px相当まで拡大してTesseractに渡す
+    scale = Math.max(scale, Math.min(MAX_SCALE, 30 / analysis.estimatedLineHeight));
   }
 
   scale = clamp(scale, MIN_SCALE, MAX_SCALE);
@@ -196,10 +197,18 @@ function computeScale(
     }
   }
 
+  // 小文字の場合は解像度を下げすぎないよう余裕を設ける
+  const maxPixels = smallText ? 4_500_000 : 3_000_000;
   const workPixels = origW * scale * origH * scale;
-  const maxPixels = smallText ? 3_000_000 : 2_250_000;
   if (workPixels > maxPixels) {
-    scale *= Math.sqrt(maxPixels / workPixels);
+    const safeScale = Math.sqrt(maxPixels / workPixels) * scale;
+    // 小さい文字なら最低限18px以上の文字高をキープ
+    if (analysis.estimatedLineHeight > 0) {
+      const minScaleForSmall = 18 / analysis.estimatedLineHeight;
+      scale = Math.max(safeScale, Math.min(scale, minScaleForSmall));
+    } else {
+      scale = safeScale;
+    }
   }
 
   return scale;
@@ -584,8 +593,15 @@ export function preprocessForOcr(
 
   // 画面撮影（モアレ・液晶格子・白飛び・コントラストムラ）または低コントラストの場合
   if (analysis.isLikelyScreenPhoto || analysis.contrast < 22) {
-    // 1. 液晶サブピクセルのモアレ・高周波格子ノイズをメディアンで平滑化
-    gray = median3x3(gray, w, h);
+    // 1. 小文字の細い線が消失しないよう条件分岐:
+    // 文字が小さい場合はメディアンをかけず、アンシャープマスクで文字輪郭を鋭利化
+    if (analysis.estimatedLineHeight > 0 && analysis.estimatedLineHeight < 24) {
+      const blurForSmall = gaussianBlurSeparable(gray, w, h, 0.5);
+      gray = unsharp(gray, blurForSmall, 0.4);
+    } else {
+      // 通常〜大きめの文字ならメディアンで格子ノイズを平滑化
+      gray = median3x3(gray, w, h);
+    }
     // 2. 局所適応二値化（Bradley-Roth）: 局所平均から白吹き出し内の文字も100%浮かび上がらせる
     const windowSize = Math.max(17, Math.min(51, Math.round(Math.min(w, h) * 0.032) | 1));
     gray = adaptiveThresholdBradley(gray, w, h, {

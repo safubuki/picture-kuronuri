@@ -113,6 +113,7 @@ export async function analyzeImageForRedaction(
 
   // 3. 端末内完全ローカルAI（Transformers.js NER）による文脈理解エンティティ抽出
   const fullText = ocrResult.lines.map(l => l.text).join("\n");
+  const linesText = ocrResult.lines.map(l => l.text);
   if (fullText.trim().length > 0) {
     try {
       const aiEntities = await extractEntitiesWithLocalAi(
@@ -120,7 +121,8 @@ export async function analyzeImageForRedaction(
         (status, p) => {
           onProgress?.({ status, progress: 0.85 + p * 0.08 });
         },
-        options.aiConfidenceThreshold ?? 0.5
+        options.aiConfidenceThreshold ?? 0.5,
+        linesText
       );
 
       for (const entity of aiEntities) {
@@ -262,6 +264,69 @@ export async function analyzeImageForRedaction(
             });
           }
           startIndex = endIndex;
+        }
+      }
+    }
+  }
+
+  // 5. AI・ルール協調による「文書内エンティティ全域自動伝播 (Intra-Document Propagation)」
+  // 1箇所でも特定された人名・会社名は、ドキュメント内の全出現箇所で100%確実に保護
+  const detectedPersonNames = new Set<string>();
+  const detectedCompanyNames = new Set<string>();
+
+  for (const b of boxes) {
+    if (!b.text || b.text.length < 2) continue;
+    if (b.type === "person") {
+      // 敬称・役職を除いた名前部分（例: 「鈴木部長」-> 「鈴木」）
+      const nameOnly = b.text.replace(/(?:様|さま|さん|サン|君|くん|ちゃん|氏|殿|部長|課長|社長|係長|主任|先生)$/, "").trim();
+      if (nameOnly.length >= 2 && !/^[0-9]+$/.test(nameOnly)) {
+        detectedPersonNames.add(nameOnly);
+      }
+      detectedPersonNames.add(b.text.trim());
+    } else if (b.type === "company") {
+      detectedCompanyNames.add(b.text.trim());
+    }
+  }
+
+  if (options.detectPersons && detectedPersonNames.size > 0) {
+    for (const name of detectedPersonNames) {
+      for (const line of ocrResult.lines) {
+        const matches = findEntityInLineWithFuzzy(line.text, name);
+        for (const m of matches) {
+          const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
+          if (rect) {
+            boxes.push({
+              id: `person-prop-${line.bbox.x0}-${m.startIndex}`,
+              type: "person",
+              label: "人名 (AI連動)",
+              text: m.matchedText,
+              reason: `同定済み人物名の全域保護 (${name})`,
+              rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+              enabled: true
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (options.detectCompanies && detectedCompanyNames.size > 0) {
+    for (const corp of detectedCompanyNames) {
+      for (const line of ocrResult.lines) {
+        const matches = findEntityInLineWithFuzzy(line.text, corp);
+        for (const m of matches) {
+          const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
+          if (rect) {
+            boxes.push({
+              id: `corp-prop-${line.bbox.x0}-${m.startIndex}`,
+              type: "company",
+              label: "会社名 (AI連動)",
+              text: m.matchedText,
+              reason: `同定済み組織名の全域保護 (${corp})`,
+              rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+              enabled: true
+            });
+          }
         }
       }
     }

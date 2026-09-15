@@ -78,27 +78,17 @@ export async function getLocalAiNerPipeline(
 }
 
 /**
- * テキストから人名・組織名・住所を端末内AI（文脈理解）で抽出
+ * 単一テキストスニペットに対するNERトークン分類
  */
-export async function extractEntitiesWithLocalAi(
-  text: string,
-  onProgress?: AiLoadProgressCallback,
-  minScore: number = 0.5
+async function runNerOnSnippet(
+  pipe: any,
+  snippet: string,
+  minScore: number
 ): Promise<ExtractedEntity[]> {
-  if (!text || text.trim().length === 0) return [];
-
-  const pipe = await getLocalAiNerPipeline(onProgress);
-  if (!pipe) {
-    // モデルロード不可時は空配列を返し、既存のルールベースエンジンにフォールバック
-    return [];
-  }
+  if (!snippet || snippet.trim().length < 2) return [];
 
   try {
-    onProgress?.("端末内AIで文脈・個人情報を解析中...", 0.5);
-
-    // 単語ごとのトークン分類を実行
-    // ignore_labels: O (その他)
-    const rawOutput = await pipe(text, {
+    const rawOutput = await pipe(snippet, {
       ignore_labels: ["O"]
     });
 
@@ -106,7 +96,7 @@ export async function extractEntitiesWithLocalAi(
 
     const entities: ExtractedEntity[] = [];
 
-    // B-PER, I-PER, B-ORG, I-ORG などのトークンをひとまとまりのエンティティに結合
+    // B-PER, I-PER, B-ORG, I-ORG などのトークンを結合
     let currentEntity: {
       type: "person" | "company" | "location";
       text: string;
@@ -119,19 +109,28 @@ export async function extractEntitiesWithLocalAi(
     for (const item of rawOutput) {
       const entityTag: string = item.entity || item.label || "";
       const score: number = item.score || 0;
-      const word: string = (item.word || "").replace(/^##/, ""); // サブワード記号の除去
-      const start: number = typeof item.start === "number" ? item.start : text.indexOf(word);
+      const word: string = (item.word || "").replace(/^##/, "");
+      const start: number = typeof item.start === "number" ? item.start : snippet.indexOf(word);
       const end: number = typeof item.end === "number" ? item.end : start + word.length;
-
-      // 信頼度閾値（動的しきい値で低すぎるものを除外）
-      if (score < minScore) continue;
 
       let type: "person" | "company" | "location" | null = null;
       if (entityTag.includes("PER")) type = "person";
       else if (entityTag.includes("ORG")) type = "company";
       else if (entityTag.includes("LOC")) type = "location";
 
-      if (!type) continue;
+      if (!type) {
+        if (currentEntity && currentEntity.text.trim().length >= 2) {
+          entities.push({
+            type: currentEntity.type,
+            text: currentEntity.text.trim(),
+            start: currentEntity.start,
+            end: currentEntity.end,
+            score: currentEntity.score
+          });
+        }
+        currentEntity = null;
+        continue;
+      }
 
       const isSubword = (item.word || "").startsWith("##");
       const isContinuation =
@@ -140,10 +139,13 @@ export async function extractEntitiesWithLocalAi(
         (isSubword || start <= currentEntity.end + 2);
 
       if (isContinuation && currentEntity) {
-        currentEntity.text = text.slice(currentEntity.start, end);
-        currentEntity.end = end;
-        currentEntity.score = (currentEntity.score * currentEntity.count + score) / (currentEntity.count + 1);
-        currentEntity.count++;
+        // 継続トークン（I-PERなど）は姓名の結合を維持するためスコア閾値を緩和
+        if (score >= minScore * 0.45) {
+          currentEntity.text = snippet.slice(currentEntity.start, end);
+          currentEntity.end = end;
+          currentEntity.score = (currentEntity.score * currentEntity.count + score) / (currentEntity.count + 1);
+          currentEntity.count++;
+        }
       } else {
         if (currentEntity && currentEntity.text.trim().length >= 2) {
           entities.push({
@@ -154,14 +156,20 @@ export async function extractEntitiesWithLocalAi(
             score: currentEntity.score
           });
         }
-        currentEntity = {
-          type,
-          text: word,
-          start,
-          end,
-          score,
-          count: 1
-        };
+
+        // 新規エンティティ開始時は minScore を要求
+        if (score >= minScore) {
+          currentEntity = {
+            type,
+            text: word,
+            start,
+            end,
+            score,
+            count: 1
+          };
+        } else {
+          currentEntity = null;
+        }
       }
     }
 
@@ -175,13 +183,81 @@ export async function extractEntitiesWithLocalAi(
       });
     }
 
-    // 記号のみや1文字のノイズを除外
-    const validEntities = entities.filter(e => {
+    return entities;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * テキストから人名・組織名・住所を端末内AI（文脈理解・マルチパス）で徹底抽出
+ */
+export async function extractEntitiesWithLocalAi(
+  fullText: string,
+  onProgress?: AiLoadProgressCallback,
+  minScore: number = 0.5,
+  linesText?: string[]
+): Promise<ExtractedEntity[]> {
+  if (!fullText || fullText.trim().length === 0) return [];
+
+  const pipe = await getLocalAiNerPipeline(onProgress);
+  if (!pipe) {
+    return [];
+  }
+
+  try {
+    onProgress?.("端末内AIで文脈・個人情報を徹底解析中 (マルチパス)...", 0.5);
+
+    const allEntitiesMap = new Map<string, ExtractedEntity>();
+
+    // Pass 1: ドキュメント全体（大域文脈）でのNER推論
+    const globalEntities = await runNerOnSnippet(pipe, fullText, minScore);
+    for (const e of globalEntities) {
+      const key = `${e.type}:${e.text.trim()}`;
+      allEntitiesMap.set(key, e);
+    }
+
+    // Pass 2: 行単位 / メッセージ単位（局所短文文脈）でのNER推論
+    // 短文ではAttentionが人名や組織名に強く集中し、長文で見落とされた人名を確実に救済
+    const lines = linesText && linesText.length > 0
+      ? linesText
+      : fullText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= 2);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.length < 2) continue;
+
+      // チャット送信者ヘッダー風の行は「送信者: 〇〇」のようにプロンプト補強して判定
+      const isHeaderLike = line.length <= 12 && !/[、。！？!?]/.test(line);
+      const testSnippet = isHeaderLike ? `送信者: ${line}` : line;
+
+      const localEntities = await runNerOnSnippet(pipe, testSnippet, minScore * 0.85);
+      for (const e of localEntities) {
+        const cleanedText = e.text.replace(/^送信者[:：\s]*/, "").trim();
+        if (cleanedText.length >= 2 && !/^[0-9]+$/.test(cleanedText)) {
+          const key = `${e.type}:${cleanedText}`;
+          const existing = allEntitiesMap.get(key);
+          if (!existing || existing.score < e.score) {
+            allEntitiesMap.set(key, {
+              ...e,
+              text: cleanedText
+            });
+          }
+        }
+      }
+    }
+
+    // 一般的な定型句や記号のフィルタリング
+    const validEntities = Array.from(allEntitiesMap.values()).filter((e) => {
       const cleaned = e.text.replace(/[\s\r\n\t]/g, "");
-      return cleaned.length >= 2 && !/^[0-9]+$/.test(cleaned);
+      if (cleaned.length < 2) return false;
+      if (/^[0-9]+$/.test(cleaned)) return false;
+      // 定型語句の誤検知を除外
+      if (/^(お疲れ様|よろしく|ありがとう|承知|了解|相談|確認|連絡|対応|添付|送付|返信)$/.test(cleaned)) return false;
+      return true;
     });
 
-    console.log("[LocalAiNer] Extracted entities:", JSON.stringify(validEntities));
+    console.log("[LocalAiNer] Multi-pass extracted entities:", JSON.stringify(validEntities));
     return validEntities;
   } catch (err) {
     console.warn("[LocalAiNer] Entity extraction error:", err);
