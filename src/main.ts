@@ -1945,6 +1945,9 @@ function initPwaAndStorageManager(): void {
   const storageTotalBytes = document.getElementById("storageTotalBytes") as HTMLSpanElement | null;
   const statusOcrCache = document.getElementById("statusOcrCache") as HTMLSpanElement | null;
   const statusNerCache = document.getElementById("statusNerCache") as HTMLSpanElement | null;
+  const statusLlmCache = document.getElementById("statusLlmCache") as HTMLSpanElement | null;
+  const llmCachedActions = document.getElementById("llmCachedActions") as HTMLDivElement | null;
+  const btnDeleteLlmData = document.getElementById("btnDeleteLlmData") as HTMLButtonElement | null;
 
   const updateToggleUi = (checked: boolean) => {
     if (!toggleLlmTrack || !toggleLlmThumb) return;
@@ -1973,10 +1976,33 @@ function initPwaAndStorageManager(): void {
         statusNerCache.textContent = stats.models.ner.isCached ? "保存済み" : "初回解析時に保存";
         statusNerCache.style.color = stats.models.ner.isCached ? "#10b981" : "var(--text-dim)";
       }
+      if (statusLlmCache) {
+        if (stats.models.llm.isCached) {
+          const llmMb = (stats.models.llm.sizeBytes / (1024 * 1024)).toFixed(0);
+          statusLlmCache.textContent = `保存済み (${llmMb} MB)`;
+          statusLlmCache.style.color = "#10b981";
+          if (llmCachedActions) llmCachedActions.style.display = "flex";
+        } else {
+          statusLlmCache.textContent = "未保存";
+          statusLlmCache.style.color = "var(--text-dim)";
+          if (llmCachedActions) llmCachedActions.style.display = "none";
+        }
+      }
     } catch {
       storageTotalBytes.textContent = "取得エラー";
     }
   };
+
+  btnDeleteLlmData?.addEventListener("click", async () => {
+    if (confirm("端末に保存されている文脈AI（極小LLM）のモデルデータ（約350MB）を削除しますか？\n（いつでも再ダウンロード・再有効化できます）")) {
+      await ModelCacheManager.clearCategory("llm");
+      setLlmOptInEnabled(false);
+      if (toggleLlm) toggleLlm.checked = false;
+      updateToggleUi(false);
+      showToast("🗑️ 文脈AIデータを削除し、端末容量を解放しました");
+      await updateStorageStats();
+    }
+  });
 
   if (toggleLlm) {
     toggleLlm.checked = isLlmOptInEnabled();
@@ -2004,7 +2030,18 @@ function initPwaAndStorageManager(): void {
           if (llmProgressContainer) llmProgressContainer.style.display = "none";
         }
       } else {
-        showToast("文脈理解AIを無効化しました");
+        const stats = await ModelCacheManager.getCacheStorageStats();
+        if (stats.models.llm.isCached) {
+          if (confirm("文脈理解AIをOFFにしました。\n端末に保存されているモデルデータ（約350MB）も削除して空き容量を増やしますか？")) {
+            await ModelCacheManager.clearCategory("llm");
+            showToast("🗑️ モデルデータを削除し、空き容量を解放しました");
+          } else {
+            showToast("文脈理解AIを無効化しました（モデルは保持されます）");
+          }
+        } else {
+          showToast("文脈理解AIを無効化しました");
+        }
+        await updateStorageStats();
       }
     });
   }

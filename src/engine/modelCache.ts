@@ -217,6 +217,38 @@ export class ModelCacheManager {
         }
       }
 
+      // transformers-cache も合算・確認
+      if ('caches' in window) {
+        try {
+          const tfCache = await caches.open('transformers-cache');
+          if (tfCache) {
+            const tfKeys = await tfCache.keys();
+            for (const req of tfKeys) {
+              const res = await tfCache.match(req);
+              if (res) {
+                const lenStr = res.headers.get('content-length');
+                let size = lenStr ? parseInt(lenStr, 10) : 0;
+                if (!size) {
+                  const blob = await res.clone().blob();
+                  size = blob.size;
+                }
+                totalBytes += size;
+                const url = req.url.toLowerCase();
+                if (url.includes('qwen') || url.includes('0.5b')) {
+                  hasLlm = true;
+                  llmBytes += size;
+                } else if (url.includes('ner') || url.includes('bert')) {
+                  hasNer = true;
+                  nerBytes += size;
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       return {
         totalBytes,
         itemsCount: requests.length,
@@ -246,7 +278,9 @@ export class ModelCacheManager {
   static async clearAll(): Promise<boolean> {
     if (typeof window === 'undefined' || !('caches' in window)) return false;
     try {
-      return await caches.delete(CACHE_NAME);
+      await caches.delete(CACHE_NAME);
+      await caches.delete('transformers-cache');
+      return true;
     } catch (e) {
       console.warn('[ModelCacheManager] Failed to delete cache:', e);
       return false;
@@ -257,26 +291,33 @@ export class ModelCacheManager {
    * カテゴリ指定でキャッシュを削除（例: llm のみ削除）
    */
   static async clearCategory(category: 'ner' | 'ocr' | 'llm'): Promise<number> {
-    const cache = await this.getCache();
-    if (!cache) return 0;
+    let deleted = 0;
     try {
-      const requests = await cache.keys();
-      let deleted = 0;
-      for (const req of requests) {
-        const url = req.url.toLowerCase();
-        let match = false;
-        if (category === 'ner' && (url.includes('ner') || url.includes('bert'))) match = true;
-        if (category === 'ocr' && (url.includes('tesseract') || url.includes('jpn') || url.includes('ocr'))) match = true;
-        if (category === 'llm' && (url.includes('qwen') || url.includes('llm'))) match = true;
+      const cacheList = [CACHE_NAME, 'transformers-cache'];
+      for (const cName of cacheList) {
+        if (!('caches' in window)) continue;
+        try {
+          const cache = await caches.open(cName);
+          const requests = await cache.keys();
+          for (const req of requests) {
+            const url = req.url.toLowerCase();
+            let match = false;
+            if (category === 'ner' && (url.includes('ner') || url.includes('bert'))) match = true;
+            if (category === 'ocr' && (url.includes('tesseract') || url.includes('jpn') || url.includes('ocr'))) match = true;
+            if (category === 'llm' && (url.includes('qwen') || url.includes('llm') || url.includes('0.5b'))) match = true;
 
-        if (match) {
-          await cache.delete(req);
-          deleted++;
+            if (match) {
+              await cache.delete(req);
+              deleted++;
+            }
+          }
+        } catch {
+          // ignore
         }
       }
       return deleted;
     } catch {
-      return 0;
+      return deleted;
     }
   }
 }
