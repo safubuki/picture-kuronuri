@@ -21,6 +21,7 @@ const canvasViewport = document.getElementById("canvasViewport") as HTMLDivEleme
 const renderCanvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const progressOverlay = document.getElementById("progressOverlay") as HTMLDivElement;
 const progressStatus = document.getElementById("progressStatus") as HTMLHeadingElement;
+const progressSubStatus = document.getElementById("progressSubStatus") as HTMLDivElement;
 const progressBar = document.getElementById("progressBar") as HTMLDivElement;
 const perspectiveBar = document.getElementById("perspectiveBar") as HTMLDivElement;
 const btnResetCornersFull = document.getElementById("btnResetCornersFull") as HTMLButtonElement;
@@ -592,7 +593,14 @@ function syncUiWithState(state: AppState): void {
   // プログレス表示
   if (state.isAnalyzing) {
     progressOverlay.style.display = "flex";
-    progressStatus.textContent = state.progressText;
+    if (state.progressText.includes("\n")) {
+      const [mainMsg, subMsg] = state.progressText.split("\n");
+      progressStatus.textContent = mainMsg;
+      if (progressSubStatus) progressSubStatus.textContent = subMsg;
+    } else {
+      progressStatus.textContent = state.progressText;
+      if (progressSubStatus) progressSubStatus.textContent = "";
+    }
     progressBar.style.width = `${Math.round(state.progressPercent * 100)}%`;
   } else {
     progressOverlay.style.display = "none";

@@ -48,14 +48,18 @@ export async function getLocalAiNerPipeline(
   isModelLoading = true;
 
   try {
-    onProgress?.("端末内AIモデルを準備中 (初回のみダウンロード)...", 0.05);
+    onProgress?.("端末内AIモデルを準備中...\n(初回のみダウンロード)", 0.05);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const progressCallback = (progressInfo: any) => {
       if (progressInfo.status === "progress" && typeof progressInfo.progress === "number") {
         const p = Math.min(0.95, progressInfo.progress / 100);
-        const mb = progressInfo.loaded ? ` (${(progressInfo.loaded / (1024 * 1024)).toFixed(1)} MB)` : "";
-        onProgress?.(`端末内AIモデルをロード中${mb}...`, p);
+        const percentText = `${Math.round(p * 100)}%`;
+        const mbText = progressInfo.loaded
+          ? `${(progressInfo.loaded / (1024 * 1024)).toFixed(1)} MB`
+          : "";
+        const subInfo = mbText ? `${mbText} / ${percentText}` : percentText;
+        onProgress?.(`端末内AIモデルをロード中...\n${subInfo}`, p);
       } else if (progressInfo.status === "done") {
         onProgress?.("端末内AIモデルの展開完了", 0.98);
       }
