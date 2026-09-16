@@ -80,6 +80,7 @@ const btnUndo = document.getElementById("btnUndo") as HTMLButtonElement;
 const btnRedo = document.getElementById("btnRedo") as HTMLButtonElement;
 const btnReset = document.getElementById("btnReset") as HTMLButtonElement;
 const btnToolbarPerspective = document.getElementById("btnToolbarPerspective") as HTMLButtonElement;
+const btnToolbarAutoDetect = document.getElementById("btnToolbarAutoDetect") as HTMLButtonElement;
 
 // Box Editor Popover Elements
 const boxEditorPopover = document.getElementById("boxEditorPopover") as HTMLDivElement;
@@ -793,6 +794,7 @@ function syncUiWithState(state: AppState): void {
   if (btnSideClearAll) btnSideClearAll.disabled = !hasImage || state.boxes.length === 0;
   btnReset.disabled = !hasImage;
   btnReanalyze.disabled = !hasImage;
+  if (btnToolbarAutoDetect) btnToolbarAutoDetect.disabled = !hasImage;
 
   // 統計カウント
   let faceCount = 0;
@@ -821,7 +823,14 @@ function syncUiWithState(state: AppState): void {
   if (!state.sourceImage) {
     detectedItemsList.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem;">画像が読み込まれていません</div>`;
   } else if (state.boxes.length === 0) {
-    detectedItemsList.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem;">保護対象は検出されませんでした</div>`;
+    detectedItemsList.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem 0.5rem;">
+      <p style="margin-bottom: 0.5rem;">黒塗りがありません</p>
+      <button id="btnEmptyStateAutoDetect" class="btn btn-secondary btn-sm" style="font-size: 0.76rem;">✨ 自動検出を実行</button>
+    </div>`;
+    const btnEmpty = document.getElementById("btnEmptyStateAutoDetect");
+    if (btnEmpty) {
+      btnEmpty.addEventListener("click", () => startAnalysis());
+    }
   } else {
     detectedItemsList.innerHTML = "";
     state.boxes.forEach((box) => {
@@ -1240,10 +1249,21 @@ function initEvents(): void {
     const state = appState.getState();
     if (!state.sourceImage || state.boxes.length === 0) return;
     appState.clearAllBoxes();
-    showToast("🗑️ すべての黒塗りを解除しました（「↩️ 戻す」で復元できます）");
+    showToast("🗑️ すべての黒塗りを解除しました（「✨ 自動検出」で再検出できます）");
   };
   if (btnClearAllBoxes) btnClearAllBoxes.addEventListener("click", clearAllAction);
   if (btnSideClearAll) btnSideClearAll.addEventListener("click", clearAllAction);
+
+  if (btnToolbarAutoDetect) {
+    btnToolbarAutoDetect.addEventListener("click", () => {
+      const state = appState.getState();
+      if (!state.sourceImage) {
+        showToast("先に写真を撮影または選択してください");
+        return;
+      }
+      startAnalysis();
+    });
+  }
 
   btnUndo.addEventListener("click", () => appState.undo());
   btnRedo.addEventListener("click", () => appState.redo());

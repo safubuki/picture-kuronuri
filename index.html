@@ -68,15 +68,22 @@
     <main class="main-layout">
       <!-- Left: Workspace & Canvas -->
       <section class="workspace-card" aria-label="画像作業エリア">
-        <!-- Top Toolbar -->
+        <!-- Top Toolbar (Strictly 1 Row) -->
         <div class="workspace-toolbar">
           <!-- Operation Mode -->
           <div class="tool-group tool-mode-group">
             <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして編集・解除">
               👆 選択/編集
             </button>
-            <button id="toolDrawMode" class="tool-btn" title="ドラッグして自由に黒塗りを追加">
-              ✍️ 追加
+            <button id="toolDrawMode" class="tool-btn" title="ドラッグして自由に黒塗りを手動追加">
+              ✍️ 手動追加
+            </button>
+          </div>
+
+          <!-- Auto Detect Action (Next to manual add / style) -->
+          <div class="tool-group">
+            <button id="btnToolbarAutoDetect" class="tool-btn" title="画像内の個人情報をAIとルールで自動検出して黒塗り">
+              ✨ 自動検出
             </button>
           </div>
 
@@ -106,26 +113,13 @@
             </select>
           </div>
 
-          <!-- History & Compare -->
-          <div class="tool-group">
-            <button id="btnCompare" class="tool-btn" title="元画像と比較（長押しまたはトグル）">
-              👁️ <span class="tool-btn-text">元画像</span>
-            </button>
-            <button id="btnUndo" class="tool-btn" title="元に戻す (Ctrl+Z)" disabled>
-              ↩️ <span class="tool-btn-text">戻す</span>
-            </button>
-            <button id="btnRedo" class="tool-btn" title="やり直す (Ctrl+Y)" disabled>
-              ↪️ <span class="tool-btn-text">進む</span>
-            </button>
-          </div>
-
           <!-- Secondary Actions -->
           <div class="tool-group tool-aux-group">
-            <button id="btnToolbarPerspective" class="tool-btn" title="斜め撮影写真の4隅を虫眼鏡で微調整して正対化">
-              📐 <span class="tool-btn-text">4隅調整</span>
-            </button>
             <button id="btnClearAllBoxes" class="tool-btn" title="すべての黒塗りを一括解除">
               🗑️ <span class="tool-btn-text">全解除</span>
+            </button>
+            <button id="btnToolbarPerspective" class="tool-btn" title="斜め撮影写真の4隅を虫眼鏡で微調整して正対化">
+              📐 <span class="tool-btn-text">4隅調整</span>
             </button>
             <button id="btnReset" class="tool-btn" title="画像を閉じる">
               ✕
@@ -234,8 +228,21 @@
             </div>
           </div>
 
-          <!-- Floating Zoom & Line Snap Controls (Mobile & Desktop) -->
+          <!-- Floating Canvas Controls (Undo/Redo, Compare, Snap, Zoom) -->
           <div id="zoomControls" class="zoom-controls" style="display: none;">
+            <button id="btnUndo" class="zoom-btn" title="元に戻す (Ctrl+Z)" disabled>
+              <span class="zoom-btn-icon">↩️</span>
+              <span class="zoom-btn-text">戻す</span>
+            </button>
+            <button id="btnRedo" class="zoom-btn" title="やり直す (Ctrl+Y)" disabled>
+              <span class="zoom-btn-icon">↪️</span>
+              <span class="zoom-btn-text">進む</span>
+            </button>
+            <button id="btnCompare" class="zoom-btn" title="元画像と比較（長押しまたはトグル）">
+              <span class="zoom-btn-icon">👁️</span>
+              <span class="zoom-btn-text">元画像</span>
+            </button>
+            <div class="zoom-btn-divider"></div>
             <button id="btnToggleLineSnap" class="zoom-btn zoom-snap-btn active" title="行スナップ（指でざっくりなぞるだけで行に合わせて綺麗に黒塗り）">
               <span class="zoom-btn-icon">🧲</span>
               <span class="zoom-btn-text">行スナップ</span>
