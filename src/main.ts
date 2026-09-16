@@ -75,7 +75,7 @@ const selectDrawLabel = document.getElementById("selectDrawLabel") as HTMLSelect
 const selectRedactStyle = document.getElementById("selectRedactStyle") as HTMLSelectElement;
 const btnCompare = document.getElementById("btnCompare") as HTMLButtonElement;
 const btnClearAllBoxes = document.getElementById("btnClearAllBoxes") as HTMLButtonElement;
-const btnSideClearAll = document.getElementById("btnSideClearAll") as HTMLButtonElement;
+const btnSideClearAll = document.getElementById("btnSideClearAll") as HTMLButtonElement | null;
 const btnUndo = document.getElementById("btnUndo") as HTMLButtonElement;
 const btnRedo = document.getElementById("btnRedo") as HTMLButtonElement;
 const btnReset = document.getElementById("btnReset") as HTMLButtonElement;
@@ -104,8 +104,8 @@ const btnCopyImage = document.getElementById("btnCopyImage") as HTMLButtonElemen
 const btnDownloadImage = document.getElementById("btnDownloadImage") as HTMLButtonElement;
 const btnCopyRedactedText = document.getElementById("btnCopyRedactedText") as HTMLButtonElement;
 const txtRedactedPreview = document.getElementById("txtRedactedPreview") as HTMLTextAreaElement;
-const btnCopyPrompt = document.getElementById("btnCopyPrompt") as HTMLButtonElement;
-const aiPromptSelect = document.getElementById("aiPromptSelect") as HTMLSelectElement;
+const btnCopyPrompt = document.getElementById("btnCopyPrompt") as HTMLButtonElement | null;
+const aiPromptSelect = document.getElementById("aiPromptSelect") as HTMLSelectElement | null;
 
 const toggleFaces = document.getElementById("toggleFaces") as HTMLInputElement;
 const togglePersons = document.getElementById("togglePersons") as HTMLInputElement;
@@ -1587,8 +1587,11 @@ function initEvents(): void {
       return;
     }
 
-    const promptType = aiPromptSelect.value || "summary";
-    const fullText = buildAiPromptWithRedactedText(res.redactedText, promptType);
+    const promptType = aiPromptSelect?.value || "summary";
+    let fullText = res.redactedText;
+    if (promptType !== "none") {
+      fullText = buildAiPromptWithRedactedText(res.redactedText, promptType);
+    }
 
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1596,7 +1599,11 @@ function initEvents(): void {
       } else {
         throw new Error("clipboard API unsupported");
       }
-      showToast("✨ 伏字テキスト＋指示文をコピーしました！AIにそのまま貼り付け可能です", 4000);
+      if (promptType !== "none") {
+        showToast("伏字テキスト＋AI指示文をコピーしました", 3500);
+      } else {
+        showToast("伏字テキストをコピーしました", 3500);
+      }
     } catch {
       // フォールバック
       if (txtRedactedPreview) {
@@ -1604,15 +1611,25 @@ function initEvents(): void {
         txtRedactedPreview.focus();
         txtRedactedPreview.select();
         document.execCommand("copy");
-        showToast("✨ 伏字テキスト＋指示文をコピーしました！", 4000);
+        showToast("伏字テキストをコピーしました", 3500);
       } else {
         showToast("クリップボードへのコピーに失敗しました");
       }
     }
   });
 
-  btnCopyPrompt.addEventListener("click", async () => {
-    const promptType = aiPromptSelect.value as "summary" | "reply" | "advice";
+  if (aiPromptSelect) {
+    const savedPrompt = localStorage.getItem("kuronuri_prompt_template");
+    if (savedPrompt) {
+      aiPromptSelect.value = savedPrompt;
+    }
+    aiPromptSelect.addEventListener("change", () => {
+      localStorage.setItem("kuronuri_prompt_template", aiPromptSelect.value);
+    });
+  }
+
+  btnCopyPrompt?.addEventListener("click", async () => {
+    const promptType = (aiPromptSelect?.value || "summary") as "summary" | "reply" | "advice";
     const res = await copyAiPromptToClipboard(promptType);
     showToast(res.message, 3500);
   });
@@ -2189,6 +2206,9 @@ function initMobileSheetAndActions(): void {
       if (targetId) {
         const targetEl = document.getElementById(targetId);
         if (targetEl) {
+          if (targetEl instanceof HTMLDetailsElement) {
+            targetEl.open = true;
+          }
           targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
         }
       }

@@ -43,12 +43,16 @@
         <button id="btnPwaInstall" class="btn btn-secondary btn-sm" style="display: none;" title="ホーム画面に追加してアプリとして利用">
           📲 アプリ追加
         </button>
-        <!-- AI Models & Storage Manager Button -->
-        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="端末内のAIモデル保存状況とストレージを確認">
-          <span class="btn-icon">💾</span><span class="btn-text">AI容量管理</span>
+        <!-- AI Feature & Model Settings Button -->
+        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="AI相談プロンプト指示や判定感度、端末内AIモデルの設定">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; opacity: 0.85;">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span class="btn-text">AI機能設定</span>
         </button>
         <button id="btnSampleHeader" class="btn btn-secondary btn-sm" title="チャット画面のサンプルで動作をテスト">
-          <span class="btn-icon">📱</span><span class="btn-text">サンプル</span>
+          <span class="btn-text">サンプル</span>
         </button>
         <button id="btnNewPhotoHeader" class="btn btn-camera btn-sm">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -304,74 +308,61 @@
           <div class="sheet-drag-handle" id="sheetDragHandle"></div>
           <div class="sheet-title-bar">
             <div class="sheet-title">
-              <span>⚙️ 設定・詳細ツール</span>
+              <span>設定・ツール</span>
             </div>
             <button id="btnCloseMobileSheet" class="sheet-close-btn" aria-label="メニューを閉じる">
-              ✕ 閉じる
+              閉じる
             </button>
           </div>
           <div class="sheet-nav-pills">
-            <button type="button" class="sheet-pill" data-target="cardFilterSettings">⚙️ フィルター</button>
-            <button type="button" class="sheet-pill" data-target="cardDistortion">📷 写真補正</button>
-            <button type="button" class="sheet-pill" data-target="cardAiExport">📝 AIテキスト</button>
-            <button type="button" class="sheet-pill" data-target="cardDetectedList">📋 保護一覧</button>
+            <button type="button" class="sheet-pill" data-target="cardAiExport">エクスポート</button>
+            <button type="button" class="sheet-pill" data-target="cardStats">サマリー</button>
+            <button type="button" class="sheet-pill" data-target="cardDistortion">写真補正</button>
+            <button type="button" class="sheet-pill" data-target="cardFilterSettings">フィルター</button>
+            <button type="button" class="sheet-pill" data-target="cardDetectedList">保護一覧</button>
           </div>
         </div>
 
-        <!-- AI Export Card -->
+        <!-- 1. Export Card (Always Visible, Daily-use Primary) -->
         <div id="cardAiExport" class="panel-card ai-export-card">
           <div class="panel-title">
-            <span>✨ AIに相談・エクスポート</span>
-            <span class="panel-badge">安全</span>
+            <span>エクスポート</span>
+            <span class="panel-badge">安全・端末内完結</span>
           </div>
-          <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.85rem;">
-            黒塗り処理済みの画像をワンクリックでクリップボードにコピーして、ChatGPTやClaude等のチャット欄にそのまま貼り付けられます。
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.85rem; line-height: 1.4;">
+            黒塗り処理済みの画像や伏字テキストをワンクリックでコピーし、安全に共有・AI相談できます。
           </p>
 
-          <button id="btnCopyImage" class="btn btn-primary btn-block" style="margin-bottom: 0.6rem;">
-            📋 画像をクリップボードにコピー
+          <button id="btnCopyImage" class="btn btn-primary btn-block" style="margin-bottom: 0.6rem; font-weight: 600;">
+            画像をコピー
           </button>
 
           <button id="btnDownloadImage" class="btn btn-secondary btn-block" style="margin-bottom: 0.85rem;">
-            📥 画像をダウンロード (PNG)
+            画像を保存 (PNG)
           </button>
 
           <!-- 伏字テキスト抽出（AI相談用） -->
-          <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.75rem; margin-bottom: 0.85rem;">
+          <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.75rem;">
             <div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
-              <span>📝 AI相談用テキスト (伏字化済み)</span>
-              <span style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px;">最高精度</span>
+              <span>AI相談用テキスト (伏字化)</span>
+              <span style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 2px 6px; border-radius: 4px;">外部送信安全</span>
             </div>
             <p style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.35;">
-              個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[会社名]</code> などに伏字置換したテキストです。画像送信より高速・安全にAIへ質問できます。
+              個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[会社名]</code> などに置換。画像より高速・安全にAIへ質問できます。
             </p>
             <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="margin-bottom: 0.5rem; border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600;">
-              ✨ 伏字テキスト＋指示文をコピー
+              伏字テキストをコピー
             </button>
             <details id="detailsRedactedText" style="font-size: 0.75rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.35rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.06);">
-              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 600; user-select: none;">
-                🔍 伏字テキストをプレビュー
+              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 500; user-select: none;">
+                伏字テキストをプレビュー
               </summary>
               <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 90px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.72rem; padding: 0.4rem; resize: vertical; box-sizing: border-box;" placeholder="解析が完了すると、伏字化されたテキストがここに表示されます"></textarea>
             </details>
           </div>
-
-          <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.85rem;">
-            <label for="aiPromptSelect" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">
-              AI相談用プロンプト指示の指定:
-            </label>
-            <select id="aiPromptSelect" class="ai-prompt-select">
-              <option value="summary">要約・決定事項の整理依頼</option>
-              <option value="reply">返信メッセージ文案の作成依頼</option>
-              <option value="advice">ビジネスアドバイス・課題分析の依頼</option>
-            </select>
-            <button id="btnCopyPrompt" class="btn btn-secondary btn-sm btn-block">
-              💬 プロンプト定型文のみコピー
-            </button>
-          </div>
         </div>
 
-        <!-- Detection Statistics & Badges -->
+        <!-- 2. Detection Statistics (Always Visible, Daily-use Summary) -->
         <div id="cardStats" class="panel-card">
           <div class="panel-title">
             <span>検出サマリー</span>
@@ -379,199 +370,188 @@
           </div>
           <div class="stats-grid">
             <div class="stat-item">
-              <span class="stat-label">👤 顔・アバター</span>
+              <span class="stat-label">顔・アバター</span>
               <span id="statFace" class="stat-val">0</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">📛 人名・敬称</span>
+              <span class="stat-label">人名・敬称</span>
               <span id="statPerson" class="stat-val">0</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">🏢 会社名・法人</span>
+              <span class="stat-label">会社・組織</span>
               <span id="statCompany" class="stat-val">0</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">📞 連絡先・住所</span>
+              <span class="stat-label">連絡先・住所</span>
               <span id="statPii" class="stat-val">0</span>
             </div>
           </div>
           <div style="font-size: 0.72rem; color: var(--text-dim); text-align: center;">
-            ※ 画面上の黒塗りをタップすると個別に解除できます
+            ※ 画面上の黒塗りをタップすると個別に編集・解除できます
           </div>
         </div>
 
-        <!-- Camera Distortion & Enhancement -->
-        <div id="cardDistortion" class="panel-card">
-          <div class="panel-title">
-            <span>📷 撮影写真の補正 (AI不使用)</span>
-            <span class="panel-badge">歪み・傾き</span>
-          </div>
-          <div style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-            撮影・読み込み直後に、台形の正対化・傾き補正・モアレ除去まで自動で行います（AI不使用）。うまく決まらないときだけ下のボタンでやり直してください。
-          </div>
+        <!-- 3. Secondary Toolset: Collapsible Accordions (Quiet by default) -->
 
-          <!-- One-touch Auto Flatten Pipeline -->
-          <button id="btnAutoFlatten" class="btn btn-primary btn-block" style="margin-bottom: 0.65rem; background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%); font-weight: 700; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);" title="四隅の台形歪みと傾きを全自動検出し、正面フラット化して最適解析します">
-            ⚡ もう一度正対化して解析
-          </button>
+        <!-- Accordion A: Camera Distortion & Enhancement -->
+        <details id="cardDistortion" class="panel-card panel-accordion">
+          <summary class="accordion-summary">
+            <span class="accordion-title">写真補正ツール</span>
+            <span class="accordion-chevron">▼</span>
+          </summary>
+          <div class="accordion-body">
+            <p style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.75rem; line-height: 1.4;">
+              読み込み時に傾きやモアレは自動補正されます。微調整が必要な場合のみご利用ください。
+            </p>
+            <!-- Hidden backward-compatible hooks -->
+            <div style="display: none;">
+              <button id="btnAutoFlatten"></button>
+              <button id="btnPerspectiveMode"></button>
+            </div>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.6rem;">
+              <button id="btnAutoDeskew" class="btn btn-secondary btn-sm" style="flex: 1;" title="傾いた行を水平に整えます">
+                水平補正
+              </button>
+              <button id="btnAutoEnhance" class="btn btn-secondary btn-sm" style="flex: 1.2;" title="文字強調・影除去（表示用）">
+                文字強調・影除去
+              </button>
+            </div>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+              <button id="btnRotateLeft" class="btn btn-secondary btn-sm" style="flex: 1;" title="反時計回りに90°回転">
+                ↺ 90°
+              </button>
+              <button id="btnRotateRight" class="btn btn-secondary btn-sm" style="flex: 1;" title="時計回りに90°回転">
+                ↻ 90°
+              </button>
+            </div>
+            <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.4rem;">
+              <div style="display: flex; justify-content: space-between; width: 100%;">
+                <span class="setting-name">手動微細傾き調整</span>
+                <span id="deskewValDisplay" class="range-value">0°</span>
+              </div>
+              <div class="range-container">
+                <input type="range" id="sliderDeskew" class="range-input" min="-15" max="15" value="0" step="0.5">
+              </div>
+            </div>
+          </div>
+        </details>
 
-          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.6rem;">
-            <button id="btnAutoDeskew" class="btn btn-secondary btn-sm" style="flex: 1;" title="画像内の行の傾きを数学的アルゴリズムで自動検出し水平に整えます">
-              🪄 水平補正
-            </button>
-            <button id="btnPerspectiveMode" class="btn btn-secondary btn-sm" style="flex: 1;" title="斜めから撮った写真の四隅をドラッグして長方形にフラット化">
-              🔲 台形補正
-            </button>
-          </div>
-          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
-            <button id="btnRotateLeft" class="btn btn-secondary btn-sm" style="flex: 1;" title="反時計回りに90°回転">
-              ↺ 90°
-            </button>
-            <button id="btnRotateRight" class="btn btn-secondary btn-sm" style="flex: 1;" title="時計回りに90°回転">
-              ↻ 90°
-            </button>
-            <button id="btnAutoEnhance" class="btn btn-secondary btn-sm" style="flex: 1.2;" title="モアレ低減・局所コントラスト・文字強調（表示用）">
-              ✨ 影除去・強調
-            </button>
-          </div>
-          <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.4rem;">
-            <div style="display: flex; justify-content: space-between; width: 100%;">
-              <span class="setting-name">手動微細傾き調整</span>
-              <span id="deskewValDisplay" class="range-value">0°</span>
+        <!-- Accordion B: Detection Filters -->
+        <details id="cardFilterSettings" class="panel-card panel-accordion">
+          <summary class="accordion-summary">
+            <span class="accordion-title">検出フィルター設定</span>
+            <span class="accordion-chevron">▼</span>
+          </summary>
+          <div class="accordion-body">
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 0.6rem;">
+              <button id="btnReanalyze" class="btn btn-secondary btn-sm" title="現在の設定で再解析">
+                設定を反映して再解析
+              </button>
             </div>
-            <div class="range-container">
-              <input type="range" id="sliderDeskew" class="range-input" min="-15" max="15" value="0" step="0.5">
-            </div>
-          </div>
-        </div>
 
-        <!-- Detection Filter Settings -->
-        <div id="cardFilterSettings" class="panel-card">
-          <div class="panel-title">
-            <span>自動検出フィルター設定</span>
-            <button id="btnReanalyze" class="btn btn-secondary btn-sm" title="現在の設定で再解析">
-              🔄 再解析
-            </button>
-          </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">顔写真 & アイコン (アバター)</span>
+                <span class="setting-desc">実写の顔写真・イラストアイコンを保護</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleFaces" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">顔写真 & アイコン (アバター)</span>
-              <span class="setting-desc">実写の顔写真・イニシャル/イラストアイコンを隠す</span>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">人名 & 敬称 (名字辞書)</span>
+                <span class="setting-desc">「様」「さん」「山田」など</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="togglePersons" checked>
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggleFaces" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">人名 & 敬称 (名字辞書)</span>
-              <span class="setting-desc">「〇〇様」「〇〇さん」「山田」など</span>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">会社名 & 法人・組織</span>
+                <span class="setting-desc">「株式会社」「〇〇社」「〇〇銀行」</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleCompanies" checked>
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="togglePersons" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">会社名 & 法人・組織</span>
-              <span class="setting-desc">「株式会社〇〇」「〇〇社」「〇〇銀行」</span>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">連絡先 (電話/メール/住所/金額)</span>
+                <span class="setting-desc">特定可能な個人識別情報</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="togglePii" checked>
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggleCompanies" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">連絡先 (電話/メール/住所/金額)</span>
-              <span class="setting-desc">特定可能な個人識別情報</span>
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">斜め文字行に追従</span>
+                <span class="setting-desc">傾いた行に合わせて平行にマスキング</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleFollowSlope" checked>
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="togglePii" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">斜め文字行に追従 (斜め黒塗り)</span>
-              <span class="setting-desc">画像を回転せず、傾いた行に合わせて平行にマスキング</span>
+            <!-- Padding Slider -->
+            <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-top: 0.75rem;">
+              <div style="display: flex; justify-content: space-between; width: 100%;">
+                <span class="setting-name">安全マージン（余白）</span>
+                <span id="paddingValDisplay" class="range-value">+2 px</span>
+              </div>
+              <div class="range-container">
+                <input type="range" id="sliderPadding" class="range-input" min="0" max="16" value="2">
+              </div>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggleFollowSlope" checked>
-              <span class="slider"></span>
-            </label>
-          </div>
 
-          <!-- Padding Slider -->
-          <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-top: 0.75rem;">
-            <div style="display: flex; justify-content: space-between; width: 100%;">
-              <span class="setting-name">安全マージン（余白）</span>
-              <span id="paddingValDisplay" class="range-value">+2 px</span>
+            <!-- Custom Keywords -->
+            <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 0.85rem;">
+              <span class="setting-name">カスタム指定単語</span>
+              <div class="setting-desc">特定のプロジェクト名やニックネームを追加</div>
+              <div class="input-row">
+                <input type="text" id="inputCustomKeyword" class="text-input" placeholder="例: プロジェクトX" />
+                <button id="btnAddKeyword" class="btn btn-secondary btn-sm">追加</button>
+              </div>
+              <div id="customTagsList" class="custom-tags-container"></div>
             </div>
-            <div class="range-container">
-              <input type="range" id="sliderPadding" class="range-input" min="0" max="16" value="2">
-            </div>
-            <span class="setting-desc">文字の端が読めてしまわないよう少し広めに黒塗りします</span>
           </div>
+        </details>
 
-          <!-- Local AI Confidence Slider -->
-          <div class="setting-row" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid rgba(255, 255, 255, 0.04);">
-            <div style="display: flex; justify-content: space-between; width: 100%;">
-              <span class="setting-name" style="display: flex; align-items: center; gap: 0.35rem;">
-                <span>🤖 端末内AI 判定感度</span>
-                <span style="font-size: 0.68rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 1px 5px; border-radius: 4px;">完全ローカル</span>
-              </span>
-              <span id="aiConfidenceValDisplay" class="range-value">標準 (50%)</span>
-            </div>
-            <div class="range-container">
-              <input type="range" id="sliderAiConfidence" class="range-input" min="30" max="85" value="50" step="5">
-            </div>
-            <span class="setting-desc">左（30%）に寄せると文脈から疑わしい箇所を余さず拾い、右（85%）に寄せると確実な人名・組織のみに絞り込みます</span>
-          </div>
-
-          <!-- Custom Keywords -->
-          <div style="margin-top: 0.85rem; border-top: 1px solid rgba(255, 255, 255, 0.04); padding-top: 0.85rem;">
-            <span class="setting-name">カスタム指定単語</span>
-            <div class="setting-desc">特定のプロジェクト名やニックネームを追加</div>
-            <div class="input-row">
-              <input type="text" id="inputCustomKeyword" class="text-input" placeholder="例: プロジェクトX" />
-              <button id="btnAddKeyword" class="btn btn-secondary btn-sm">追加</button>
-            </div>
-            <div id="customTagsList" class="custom-tags-container"></div>
-          </div>
-        </div>
-
-        <!-- Detected Items Quick List -->
-        <div id="cardDetectedList" class="panel-card">
-          <div class="panel-title" style="display: flex; justify-content: space-between; align-items: center;">
-            <span>保護箇所一覧</span>
-            <button id="btnSideClearAll" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 2px 8px; border-color: rgba(244, 63, 94, 0.4); color: #fda4af;" title="現在の黒塗りをすべて解除">
-              🗑️ 全解除
-            </button>
-          </div>
-          <div id="detectedItemsList" class="detected-list">
-            <div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem;">
-              画像が読み込まれていません
+        <!-- Accordion C: Detected Items List -->
+        <details id="cardDetectedList" class="panel-card panel-accordion">
+          <summary class="accordion-summary">
+            <span class="accordion-title">保護箇所一覧</span>
+            <span class="accordion-chevron">▼</span>
+          </summary>
+          <div class="accordion-body">
+            <div id="detectedItemsList" class="detected-list">
+              <div style="font-size: 0.78rem; color: var(--text-dim); text-align: center; padding: 1rem;">
+                画像が読み込まれていません
+              </div>
             </div>
           </div>
-        </div>
+        </details>
 
         <!-- Storage Management Entry in Sheet (Mobile accessible) -->
         <div class="panel-card mobile-storage-card">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">💾 端末内AI・ストレージ管理</div>
-              <div style="font-size: 0.72rem; color: var(--text-dim);">極小LLM (Qwen2.5) / OCRキャッシュの管理・削除</div>
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">AI機能・モデル設定</div>
+              <div style="font-size: 0.72rem; color: var(--text-dim);">プロンプト設定・判定感度・端末内モデル管理</div>
             </div>
             <button id="btnOpenStorageModalFromSheet" class="btn btn-secondary btn-sm">
-              管理を開く
+              設定を開く
             </button>
           </div>
         </div>
@@ -635,7 +615,7 @@
       <div class="camera-modal-content" style="max-width: 520px;">
         <div class="camera-modal-header">
           <div class="camera-modal-title">
-            <span>💾 端末内AIモデル &amp; ストレージ管理</span>
+            <span>AI機能・モデル設定</span>
           </div>
           <button id="btnCloseStorageModal" class="camera-icon-btn" title="閉じる">
             ✕
@@ -646,6 +626,38 @@
           <p style="font-size: 0.82rem; color: var(--text-dim); margin-bottom: 1.25rem; line-height: 1.5;">
             KuroNuri Studio は <strong>100% 端末内（完全ローカル）</strong> で動作します。一度取得されたAIモデルや言語データはブラウザの専用キャッシュ領域に永続保存され、リロードしても再ダウンロードは一切発生しません。
           </p>
+
+          <!-- AI Prompt Template Selection -->
+          <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">AI相談用プロンプト指示</span>
+              <span style="font-size: 0.7rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px;">伏字コピー時に付与</span>
+            </div>
+            <p style="font-size: 0.74rem; color: var(--text-dim); margin-bottom: 0.6rem; line-height: 1.4;">
+              「伏字テキストをコピー」を押した際、ChatGPTやClaude等のチャット欄にそのまま貼り付けられるよう先頭に添える指示文テンプレートを選択します。
+            </p>
+            <select id="aiPromptSelect" class="tool-select" style="width: 100%; height: 38px; font-size: 0.82rem; background: rgba(10, 13, 20, 0.9); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-main); padding: 0 0.75rem;">
+              <option value="summary" selected>要約・決定事項の整理依頼</option>
+              <option value="reply">返信メッセージ文案の作成依頼</option>
+              <option value="action">タスク・ToDo抽出の依頼</option>
+              <option value="advice">ビジネスアドバイス・課題分析の依頼</option>
+              <option value="none">指示文なし（伏字テキストのみコピー）</option>
+            </select>
+          </div>
+
+          <!-- Local AI Confidence Slider -->
+          <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+              <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">端末内AI 判定感度</span>
+              <span id="aiConfidenceValDisplay" style="font-size: 0.8rem; font-weight: 600; color: #38bdf8;">標準 (50%)</span>
+            </div>
+            <p style="font-size: 0.74rem; color: var(--text-dim); margin-bottom: 0.6rem; line-height: 1.4;">
+              左（30%）に寄せると文脈から疑わしい箇所を余さず拾い、右（85%）に寄せると確実な人名・組織のみに絞り込みます。
+            </p>
+            <div class="range-container">
+              <input type="range" id="sliderAiConfidence" class="range-input" min="30" max="85" value="50" step="5">
+            </div>
+          </div>
 
           <!-- Storage Summary Box -->
           <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">

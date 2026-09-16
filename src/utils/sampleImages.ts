@@ -83,9 +83,9 @@ export function generateChatSampleImage(): SampleChatResult {
   ctx.fillStyle = "#273244";
   ctx.fillRect(0, 0, w, 110);
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillText("プロジェクト連絡（山田・鈴木）", 100, 70);
-  recordLine("プロジェクト連絡（山田・鈴木）", 100, 44, "bold 28px sans-serif", 32);
+  ctx.font = "bold 25px sans-serif";
+  ctx.fillText("【サンプル】プロジェクト連絡（山田・鈴木）", 80, 68);
+  recordLine("【サンプル】プロジェクト連絡（山田・鈴木）", 80, 42, "bold 25px sans-serif", 30);
 
   // 戻る矢印
   ctx.strokeStyle = "#ffffff";
@@ -346,8 +346,8 @@ export function generateSkewedChatSampleImage(): { dataUrl: string } {
       bCtx.fillStyle = "#1e293b";
       bCtx.fillRect(0, 0, 750, 110);
       bCtx.fillStyle = "#ffffff";
-      bCtx.font = "bold 26px sans-serif";
-      bCtx.fillText("プロジェクト連絡（山田・鈴木）", 120, 68);
+      bCtx.font = "bold 24px sans-serif";
+      bCtx.fillText("【サンプル】プロジェクト連絡（山田・鈴木）", 85, 68);
 
       // メッセージ1
       drawBubble(bCtx, 120, 180, 520, 140, "#ffffff", [
