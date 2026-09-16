@@ -1,5 +1,5 @@
 import { appState, type AppState } from "./state/appState";
-import { analyzeImageForRedaction } from "./engine/redactionEngine";
+import { analyzeImageForRedaction, type RedactBox } from "./engine/redactionEngine";
 import { renderRedactedCanvas, findBoxAtPosition, renderLineGuides } from "./engine/canvasRenderer";
 import { calculateLineSnap, type SnapResult } from "./engine/lineSnap";
 import { generateChatSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
@@ -68,13 +68,11 @@ const btnAutoEnhance = document.getElementById("btnAutoEnhance") as HTMLButtonEl
 const sliderDeskew = document.getElementById("sliderDeskew") as HTMLInputElement;
 const deskewValDisplay = document.getElementById("deskewValDisplay") as HTMLSpanElement;
 
-// Toolbar Buttons
+// Toolbar Elements
 const toolSelectMode = document.getElementById("toolSelectMode") as HTMLButtonElement;
 const toolDrawMode = document.getElementById("toolDrawMode") as HTMLButtonElement;
-const styleBlackout = document.getElementById("styleBlackout") as HTMLButtonElement;
-const styleWhiteout = document.getElementById("styleWhiteout") as HTMLButtonElement;
-const styleMosaic = document.getElementById("styleMosaic") as HTMLButtonElement;
-const styleBlur = document.getElementById("styleBlur") as HTMLButtonElement;
+const selectDrawLabel = document.getElementById("selectDrawLabel") as HTMLSelectElement;
+const selectRedactStyle = document.getElementById("selectRedactStyle") as HTMLSelectElement;
 const btnCompare = document.getElementById("btnCompare") as HTMLButtonElement;
 const btnClearAllBoxes = document.getElementById("btnClearAllBoxes") as HTMLButtonElement;
 const btnSideClearAll = document.getElementById("btnSideClearAll") as HTMLButtonElement;
@@ -82,6 +80,15 @@ const btnUndo = document.getElementById("btnUndo") as HTMLButtonElement;
 const btnRedo = document.getElementById("btnRedo") as HTMLButtonElement;
 const btnReset = document.getElementById("btnReset") as HTMLButtonElement;
 const btnToolbarPerspective = document.getElementById("btnToolbarPerspective") as HTMLButtonElement;
+
+// Box Editor Popover Elements
+const boxEditorPopover = document.getElementById("boxEditorPopover") as HTMLDivElement;
+const btnPopoverClose = document.getElementById("btnPopoverClose") as HTMLButtonElement;
+const popoverCustomLabel = document.getElementById("popoverCustomLabel") as HTMLInputElement;
+const btnApplyPopoverCustom = document.getElementById("btnApplyPopoverCustom") as HTMLButtonElement;
+const btnPopoverToggle = document.getElementById("btnPopoverToggle") as HTMLButtonElement;
+const popoverToggleText = document.getElementById("popoverToggleText") as HTMLSpanElement;
+const btnPopoverDelete = document.getElementById("btnPopoverDelete") as HTMLButtonElement;
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -635,7 +642,7 @@ function updateCanvasRender(): void {
     ctx,
     state.sourceImage,
     state.boxes,
-    state.rendererOptions,
+    { ...state.rendererOptions, selectedBoxId: state.selectedBoxId },
     false
   );
 
@@ -682,6 +689,62 @@ function updateCanvasRender(): void {
 }
 
 /**
+ * 黒塗り編集ポップオーバーの表示と位置合わせ
+ */
+function showBoxEditorPopover(box: RedactBox): void {
+  if (!boxEditorPopover || !renderCanvas || !canvasViewport) return;
+  const cRect = renderCanvas.getBoundingClientRect();
+  const vRect = canvasViewport.getBoundingClientRect();
+
+  const scaleX = cRect.width / (renderCanvas.width || 1);
+  const scaleY = cRect.height / (renderCanvas.height || 1);
+
+  // Viewport内の相対座標を計算
+  const boxLeft = cRect.left - vRect.left + box.rect.x * scaleX;
+  const boxTop = cRect.top - vRect.top + box.rect.y * scaleY;
+  const boxW = box.rect.width * scaleX;
+  const boxH = box.rect.height * scaleY;
+
+  const popoverW = 290;
+  const popoverH = 210;
+
+  // デフォルトはボックス上部に配置、上部に余白がなければ下部に配置
+  let left = boxLeft + boxW / 2 - popoverW / 2;
+  let top = boxTop - popoverH - 12;
+
+  if (top < 12) {
+    top = boxTop + boxH + 12;
+  }
+
+  // 画面枠内に収まるよう制限
+  left = Math.max(12, Math.min(vRect.width - popoverW - 12, left));
+  top = Math.max(12, Math.min(vRect.height - popoverH - 12, top));
+
+  boxEditorPopover.style.left = `${Math.round(left)}px`;
+  boxEditorPopover.style.top = `${Math.round(top)}px`;
+  boxEditorPopover.style.display = "block";
+
+  // 入力欄とトグル表示の同期
+  popoverCustomLabel.value = box.label || "";
+  if (popoverToggleText) {
+    popoverToggleText.textContent = box.enabled ? "保護を一時解除" : "保護を再適用";
+  }
+
+  // チップのアクティブ状態の同期
+  const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
+  chips.forEach((chip) => {
+    const chipLabel = chip.getAttribute("data-label");
+    chip.classList.toggle("active", chipLabel === box.label);
+  });
+}
+
+function hideBoxEditorPopover(): void {
+  if (boxEditorPopover) {
+    boxEditorPopover.style.display = "none";
+  }
+}
+
+/**
  * UI表示（統計・リスト・ボタン状態）の同期
  */
 function syncUiWithState(state: AppState): void {
@@ -705,10 +768,16 @@ function syncUiWithState(state: AppState): void {
   toolSelectMode.classList.toggle("active", state.mode === "select");
   toolDrawMode.classList.toggle("active", state.mode === "draw");
 
-  styleBlackout.classList.toggle("active", state.rendererOptions.style === "blackout");
-  styleWhiteout.classList.toggle("active", state.rendererOptions.style === "whiteout");
-  styleMosaic.classList.toggle("active", state.rendererOptions.style === "mosaic");
-  styleBlur.classList.toggle("active", state.rendererOptions.style === "blur");
+  if (selectRedactStyle) {
+    selectRedactStyle.value = state.rendererOptions.style;
+  }
+  if (selectDrawLabel && state.activeDrawLabel) {
+    selectDrawLabel.value = state.activeDrawLabel;
+  }
+
+  if (!state.selectedBoxId) {
+    hideBoxEditorPopover();
+  }
 
   btnUndo.disabled = state.historyIndex <= 0;
   btnRedo.disabled = state.historyIndex >= state.history.length - 1;
@@ -1035,14 +1104,125 @@ function initEvents(): void {
   });
 
   // 操作モード切り替え
-  toolSelectMode.addEventListener("click", () => appState.setMode("select"));
-  toolDrawMode.addEventListener("click", () => appState.setMode("draw"));
+  toolSelectMode.addEventListener("click", () => {
+    appState.setMode("select");
+  });
+  toolDrawMode.addEventListener("click", () => {
+    appState.setMode("draw");
+    hideBoxEditorPopover();
+    appState.setSelectedBoxId(null);
+    updateCanvasRender();
+  });
 
-  // 墨消しスタイル切り替え
-  styleBlackout.addEventListener("click", () => appState.setRendererOptions({ style: "blackout" }));
-  styleWhiteout.addEventListener("click", () => appState.setRendererOptions({ style: "whiteout" }));
-  styleMosaic.addEventListener("click", () => appState.setRendererOptions({ style: "mosaic" }));
-  styleBlur.addEventListener("click", () => appState.setRendererOptions({ style: "blur" }));
+  // 墨消しスタイル切り替え (ドロップダウン)
+  if (selectRedactStyle) {
+    selectRedactStyle.addEventListener("change", () => {
+      appState.setRendererOptions({ style: selectRedactStyle.value as any });
+      updateCanvasRender();
+    });
+  }
+
+  // 項目ラベル切り替え (ドロップダウン)
+  if (selectDrawLabel) {
+    selectDrawLabel.addEventListener("change", () => {
+      const val = selectDrawLabel.value;
+      appState.setActiveDrawLabel(val);
+      const state = appState.getState();
+      if (state.selectedBoxId) {
+        appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
+        updateCanvasRender();
+        refreshRedactedTextPreview();
+        const box = state.boxes.find((b) => b.id === state.selectedBoxId);
+        if (box) showBoxEditorPopover(box);
+      }
+      showToast(`次に追加する黒塗りの項目: ${val}`);
+    });
+  }
+
+  // ポップオーバーのチップ選択
+  if (boxEditorPopover) {
+    const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
+    chips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const label = chip.getAttribute("data-label");
+        const state = appState.getState();
+        if (!state.selectedBoxId || !label) return;
+
+        appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label})` });
+        appState.setActiveDrawLabel(label);
+        if (selectDrawLabel) selectDrawLabel.value = label;
+        updateCanvasRender();
+        refreshRedactedTextPreview();
+        showToast(`🏷️ ラベルを「${label}」に設定しました`);
+
+        chips.forEach((c) => c.classList.toggle("active", c === chip));
+        if (popoverCustomLabel) popoverCustomLabel.value = label;
+      });
+    });
+
+    // 自由記述カスタムラベル適用
+    if (btnApplyPopoverCustom) {
+      btnApplyPopoverCustom.addEventListener("click", () => {
+        const val = popoverCustomLabel.value.trim();
+        const state = appState.getState();
+        if (!state.selectedBoxId || !val) return;
+
+        appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
+        appState.setActiveDrawLabel(val);
+        updateCanvasRender();
+        refreshRedactedTextPreview();
+        showToast(`🏷️ ラベルを「${val}」に設定しました`);
+
+        chips.forEach((c) => c.classList.toggle("active", c.getAttribute("data-label") === val));
+      });
+    }
+
+    if (popoverCustomLabel) {
+      popoverCustomLabel.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          btnApplyPopoverCustom.click();
+        }
+      });
+    }
+
+    // 保護の一時解除/再適用
+    if (btnPopoverToggle) {
+      btnPopoverToggle.addEventListener("click", () => {
+        const state = appState.getState();
+        if (!state.selectedBoxId) return;
+        appState.toggleBox(state.selectedBoxId);
+        const updatedBox = state.boxes.find((b) => b.id === state.selectedBoxId);
+        if (updatedBox && popoverToggleText) {
+          popoverToggleText.textContent = updatedBox.enabled ? "保護を一時解除" : "保護を再適用";
+        }
+        updateCanvasRender();
+        refreshRedactedTextPreview();
+      });
+    }
+
+    // 黒塗りの完全削除
+    if (btnPopoverDelete) {
+      btnPopoverDelete.addEventListener("click", () => {
+        const state = appState.getState();
+        if (!state.selectedBoxId) return;
+        appState.removeBox(state.selectedBoxId);
+        hideBoxEditorPopover();
+        updateCanvasRender();
+        refreshRedactedTextPreview();
+        showToast("🗑️ 黒塗りを削除しました");
+      });
+    }
+
+    // 閉じるボタン
+    if (btnPopoverClose) {
+      btnPopoverClose.addEventListener("click", () => {
+        hideBoxEditorPopover();
+        appState.setSelectedBoxId(null);
+        updateCanvasRender();
+      });
+    }
+  }
 
   // 元画像比較（長押しまたはトグル）
   btnCompare.addEventListener("mousedown", () => appState.setComparing(true));
@@ -1589,9 +1769,13 @@ function initEvents(): void {
     if (state.mode === "select") {
       const box = findBoxAtPosition(state.boxes, x, y);
       if (box) {
-        appState.toggleBox(box.id);
-        showToast(box.enabled ? "保護を解除しました" : "保護を再適用しました");
+        appState.setSelectedBoxId(box.id);
+        showBoxEditorPopover(box);
+        updateCanvasRender();
       } else {
+        appState.setSelectedBoxId(null);
+        hideBoxEditorPopover();
+        updateCanvasRender();
         // ボックス外をクリック＆ドラッグした場合はパン移動を開始
         isPanning = true;
         panStartX = e.clientX;
@@ -1692,7 +1876,11 @@ function initEvents(): void {
     if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
       const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
       appState.addManualBox(currentDrawRect, rot);
-      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "手動黒塗りを追加しました");
+      const newlyAddedBox = appState.getState().boxes[appState.getState().boxes.length - 1];
+      if (newlyAddedBox) {
+        showBoxEditorPopover(newlyAddedBox);
+      }
+      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
     }
 
     currentDrawRect = null;
@@ -1752,9 +1940,13 @@ function initEvents(): void {
         const box = findBoxAtPosition(state.boxes, x, y);
         if (box) {
           e.preventDefault();
-          appState.toggleBox(box.id);
-          showToast(box.enabled ? "保護を解除しました" : "保護を再適用しました");
+          appState.setSelectedBoxId(box.id);
+          showBoxEditorPopover(box);
+          updateCanvasRender();
         } else {
+          appState.setSelectedBoxId(null);
+          hideBoxEditorPopover();
+          updateCanvasRender();
           // 何もない場所をドラッグした場合はパン移動
           isPanning = true;
           panStartX = touch.clientX;
@@ -1889,7 +2081,11 @@ function initEvents(): void {
     if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
       const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
       appState.addManualBox(currentDrawRect, rot);
-      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "手動黒塗りを追加しました");
+      const newlyAddedBox = appState.getState().boxes[appState.getState().boxes.length - 1];
+      if (newlyAddedBox) {
+        showBoxEditorPopover(newlyAddedBox);
+      }
+      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
     }
 
     currentDrawRect = null;
@@ -2170,15 +2366,23 @@ function initPwaAndStorageManager(): void {
         if (llmProgressContainer) llmProgressContainer.style.display = "block";
         showToast("🤖 文脈理解AI（LLM）の初期化を開始します");
         try {
-          await getLocalLlmPipeline((status, progress) => {
+          const pipe = await getLocalLlmPipeline((status, progress) => {
             if (llmProgressStatus) llmProgressStatus.textContent = status;
             if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
             if (llmProgressBar) llmProgressBar.style.width = `${Math.round(progress * 100)}%`;
           });
+          if (!pipe) {
+            throw new Error("Pipeline returned null");
+          }
           showToast("✨ 文脈理解AIの準備が完了しました！");
           await updateStorageStats();
         } catch (err) {
-          showToast("⚠️ 文脈AIのロードに失敗しました");
+          console.warn("[StorageModal] LLM activation failed:", err);
+          setLlmOptInEnabled(false);
+          if (toggleLlm) toggleLlm.checked = false;
+          updateToggleUi(false);
+          showToast("⚠️ お使いの端末環境では文脈AIの初期化が完了できませんでした。通常モード（高精度NER＋ルールベース）で保護します");
+          await updateStorageStats();
         } finally {
           if (llmProgressContainer) llmProgressContainer.style.display = "none";
         }

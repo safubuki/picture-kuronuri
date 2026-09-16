@@ -163,22 +163,28 @@ export async function analyzeImageForRedaction(
       const llmKeywords = await extractConfidentialKeywordsWithLlm(fullText, (status) => {
         onProgress?.({ status, progress: 0.93 });
       });
-      for (const kw of llmKeywords) {
-        for (const line of ocrResult.lines) {
-          const matches = findEntityInLineWithFuzzy(line.text, kw);
-          for (const m of matches) {
-            const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
-            if (rect) {
-              boxes.push({
-                id: `llm-confidential-${line.bbox.x0}-${m.startIndex}`,
-                type: "pii",
-                label: "機密・文脈 (LLM)",
-                text: m.matchedText,
-                reason: "端末内極小LLM文脈判定",
-                rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-                enabled: true,
-                confidence: 0.9
-              });
+      if (Array.isArray(llmKeywords)) {
+        for (const rawKw of llmKeywords) {
+          if (typeof rawKw !== "string") continue;
+          const kw = rawKw.trim();
+          if (kw.length < 2) continue;
+
+          for (const line of ocrResult.lines) {
+            const matches = findEntityInLineWithFuzzy(line.text, kw);
+            for (const m of matches) {
+              const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
+              if (rect) {
+                boxes.push({
+                  id: `llm-confidential-${line.bbox.x0}-${m.startIndex}`,
+                  type: "pii",
+                  label: "機密・文脈 (LLM)",
+                  text: m.matchedText,
+                  reason: "端末内極小LLM文脈判定",
+                  rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+                  enabled: true,
+                  confidence: 0.9
+                });
+              }
             }
           }
         }
@@ -443,7 +449,7 @@ interface FuzzyMatchResult {
  */
 function findEntityInLineWithFuzzy(lineText: string, entityText: string): FuzzyMatchResult[] {
   const results: FuzzyMatchResult[] = [];
-  if (!lineText || !entityText) return results;
+  if (!lineText || typeof lineText !== "string" || !entityText || typeof entityText !== "string") return results;
 
   const cleanEntity = entityText.replace(/[\s\t\r\n\u3000]/g, "");
   if (cleanEntity.length === 0) return results;

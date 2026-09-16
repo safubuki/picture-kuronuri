@@ -71,42 +71,64 @@
         <!-- Top Toolbar -->
         <div class="workspace-toolbar">
           <!-- Operation Mode -->
-          <div class="tool-group">
-            <button id="toolSelectMode" class="tool-btn active" title="黒塗り箇所をタップして解除/再適用">
-              👆 タップで解除
+          <div class="tool-group tool-mode-group">
+            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして編集・解除">
+              👆 選択/編集
             </button>
             <button id="toolDrawMode" class="tool-btn" title="ドラッグして自由に黒塗りを追加">
-              ✍️ ドラッグで追加
+              ✍️ 追加
             </button>
           </div>
 
-          <!-- Redaction Style -->
-          <div class="tool-group">
-            <button id="styleBlackout" class="tool-btn active" title="漆黒塗り">⬛ 黒塗り</button>
-            <button id="styleWhiteout" class="tool-btn" title="白塗り">⬜ 白塗り</button>
-            <button id="styleMosaic" class="tool-btn" title="モザイク">🟩 モザイク</button>
-            <button id="styleBlur" class="tool-btn" title="ぼかし">🌫️ ぼかし</button>
+          <!-- Redaction Item Label -->
+          <div class="tool-group tool-select-group" title="次に追加する黒塗りの種類">
+            <span class="tool-select-icon">🏷️</span>
+            <select id="selectDrawLabel" class="tool-select" title="黒塗りに付けるラベル（メール、人名、パスワード等）">
+              <option value="メール" selected>✉️ メール</option>
+              <option value="人名">👤 人名</option>
+              <option value="電話番号">📞 電話番号</option>
+              <option value="パスワード">🔑 パスワード</option>
+              <option value="住所">🏠 住所</option>
+              <option value="会社名">🏢 会社名</option>
+              <option value="金額">💴 金額</option>
+              <option value="手動">✍️ 手動</option>
+            </select>
           </div>
 
-          <!-- Utility Actions -->
+          <!-- Redaction Style (Consolidated Dropdown) -->
+          <div class="tool-group tool-select-group" title="黒塗りの表現スタイル">
+            <span class="tool-select-icon">🎨</span>
+            <select id="selectRedactStyle" class="tool-select" title="黒塗りの表現スタイル">
+              <option value="blackout" selected>⬛ 漆黒塗り</option>
+              <option value="whiteout">⬜ 白塗り</option>
+              <option value="mosaic">🟩 モザイク</option>
+              <option value="blur">🌫️ ぼかし</option>
+            </select>
+          </div>
+
+          <!-- History & Compare -->
           <div class="tool-group">
             <button id="btnCompare" class="tool-btn" title="元画像と比較（長押しまたはトグル）">
-              👁️ 元画像
+              👁️ <span class="tool-btn-text">元画像</span>
             </button>
-            <button id="btnClearAllBoxes" class="tool-btn" title="すべての黒塗りを一括解除（手動で引き直したい時に便利）">
-              🗑️ 全解除
+            <button id="btnUndo" class="tool-btn" title="元に戻す (Ctrl+Z)" disabled>
+              ↩️ <span class="tool-btn-text">戻す</span>
             </button>
-            <button id="btnUndo" class="tool-btn" title="元に戻す" disabled>
-              ↩️ 戻す
+            <button id="btnRedo" class="tool-btn" title="やり直す (Ctrl+Y)" disabled>
+              ↪️ <span class="tool-btn-text">進む</span>
             </button>
-            <button id="btnRedo" class="tool-btn" title="やり直す" disabled>
-              ↪️ 進む
-            </button>
+          </div>
+
+          <!-- Secondary Actions -->
+          <div class="tool-group tool-aux-group">
             <button id="btnToolbarPerspective" class="tool-btn" title="斜め撮影写真の4隅を虫眼鏡で微調整して正対化">
-              📐 4隅調整
+              📐 <span class="tool-btn-text">4隅調整</span>
+            </button>
+            <button id="btnClearAllBoxes" class="tool-btn" title="すべての黒塗りを一括解除">
+              🗑️ <span class="tool-btn-text">全解除</span>
             </button>
             <button id="btnReset" class="tool-btn" title="画像を閉じる">
-              ✕ 閉じる
+              ✕
             </button>
           </div>
         </div>
@@ -178,6 +200,39 @@
 
           <!-- Main Interactive Canvas -->
           <canvas id="renderCanvas" style="display: none;"></canvas>
+
+          <!-- Floating Box Inspector Popover (Item Label & Quick Actions) -->
+          <div id="boxEditorPopover" class="box-editor-popover" style="display: none;" role="dialog" aria-label="黒塗りの編集">
+            <div class="popover-header">
+              <div class="popover-title-wrap">
+                <span class="popover-icon">🏷️</span>
+                <span class="popover-title">黒塗りの項目を設定</span>
+              </div>
+              <button id="btnPopoverClose" class="popover-close-btn" title="閉じる" aria-label="閉じる">✕</button>
+            </div>
+            <div class="popover-chips">
+              <button type="button" class="popover-chip" data-label="メール">✉️ メール</button>
+              <button type="button" class="popover-chip" data-label="人名">👤 人名</button>
+              <button type="button" class="popover-chip" data-label="電話番号">📞 電話</button>
+              <button type="button" class="popover-chip" data-label="パスワード">🔑 パスワード</button>
+              <button type="button" class="popover-chip" data-label="住所">🏠 住所</button>
+              <button type="button" class="popover-chip" data-label="会社名">🏢 会社名</button>
+              <button type="button" class="popover-chip" data-label="金額">💴 金額</button>
+              <button type="button" class="popover-chip" data-label="手動">✍️ 手動</button>
+            </div>
+            <div class="popover-custom-row">
+              <input type="text" id="popoverCustomLabel" class="popover-input" placeholder="自由入力 (例: 社内ID, 案件名)" maxlength="16" />
+              <button id="btnApplyPopoverCustom" class="btn btn-sm btn-primary">適用</button>
+            </div>
+            <div class="popover-actions">
+              <button id="btnPopoverToggle" class="btn btn-sm btn-secondary" title="保護の一時解除/再適用">
+                <span id="popoverToggleIcon">👁️</span> <span id="popoverToggleText">保護を解除</span>
+              </button>
+              <button id="btnPopoverDelete" class="btn btn-sm btn-danger" title="この黒塗りを完全に削除">
+                🗑️ 削除
+              </button>
+            </div>
+          </div>
 
           <!-- Floating Zoom & Line Snap Controls (Mobile & Desktop) -->
           <div id="zoomControls" class="zoom-controls" style="display: none;">

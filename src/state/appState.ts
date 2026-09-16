@@ -19,6 +19,8 @@ export interface AppState {
   panX: number;
   panY: number;
   lineSnapEnabled: boolean;
+  activeDrawLabel: string;
+  selectedBoxId: string | null;
 }
 
 export const initialState: AppState = {
@@ -36,7 +38,9 @@ export const initialState: AppState = {
   zoom: 1.0,
   panX: 0,
   panY: 0,
-  lineSnapEnabled: true
+  lineSnapEnabled: true,
+  activeDrawLabel: "メール",
+  selectedBoxId: null
 };
 
 export class StateManager {
@@ -73,6 +77,30 @@ export class StateManager {
     this.state.zoom = 1.0;
     this.state.panX = 0;
     this.state.panY = 0;
+    this.state.selectedBoxId = null;
+    this.notify();
+  }
+
+  public setSelectedBoxId(boxId: string | null): void {
+    if (this.state.selectedBoxId === boxId) return;
+    this.state.selectedBoxId = boxId;
+    this.notify();
+  }
+
+  public setActiveDrawLabel(label: string): void {
+    this.state.activeDrawLabel = label;
+    this.notify();
+  }
+
+  public updateBox(boxId: string, updates: Partial<RedactBox>): void {
+    const nextBoxes = this.state.boxes.map((b) => {
+      if (b.id === boxId) {
+        return { ...b, ...updates };
+      }
+      return b;
+    });
+    this.state.boxes = nextBoxes;
+    this.pushHistory(nextBoxes);
     this.notify();
   }
 
@@ -85,6 +113,7 @@ export class StateManager {
 
   public setBoxes(boxes: RedactBox[]): void {
     this.state.boxes = boxes;
+    this.state.selectedBoxId = null;
     this.pushHistory(boxes);
     this.notify();
   }
@@ -108,11 +137,12 @@ export class StateManager {
     // 最小サイズチェック
     if (rect.width < 5 || rect.height < 5) return;
 
+    const label = this.state.activeDrawLabel || "メール";
     const newBox: RedactBox = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: "manual",
-      label: "手動指定",
-      reason: "ユーザーによる手動墨消し",
+      label,
+      reason: `ユーザー指定 (${label})`,
       rect,
       rotation,
       enabled: true,
@@ -121,11 +151,15 @@ export class StateManager {
 
     const nextBoxes = [...this.state.boxes, newBox];
     this.state.boxes = nextBoxes;
+    this.state.selectedBoxId = newBox.id;
     this.pushHistory(nextBoxes);
     this.notify();
   }
 
   public removeBox(boxId: string): void {
+    if (this.state.selectedBoxId === boxId) {
+      this.state.selectedBoxId = null;
+    }
     const nextBoxes = this.state.boxes.filter(b => b.id !== boxId);
     this.state.boxes = nextBoxes;
     this.pushHistory(nextBoxes);
@@ -135,6 +169,7 @@ export class StateManager {
   public clearAllBoxes(): void {
     if (this.state.boxes.length === 0) return;
     this.state.boxes = [];
+    this.state.selectedBoxId = null;
     this.pushHistory([]);
     this.notify();
   }

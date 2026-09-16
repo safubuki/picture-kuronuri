@@ -22,6 +22,18 @@ export interface RedactedTextResult {
  * ラベルに応じた伏字プレースホルダーを取得
  */
 function getPlaceholder(box: RedactBox): string {
+  const l = (box.label || "").trim();
+  if (l && l !== "手動指定" && l !== "手動") {
+    if (l === "メール" || l.includes("メール")) return "[メールアドレス]";
+    if (l === "電話番号" || l.includes("電話")) return "[電話番号]";
+    if (l === "住所" || l.includes("住所")) return "[住所]";
+    if (l === "人名" || l.includes("人名")) return "[人名]";
+    if (l === "会社名" || l.includes("会社")) return "[会社名]";
+    if (l === "パスワード" || l.includes("パスワード")) return "[パスワード]";
+    if (l === "金額" || l.includes("金額")) return "[金額]";
+    return `[${l}]`;
+  }
+
   switch (box.type) {
     case "person":
       return "[人名]";

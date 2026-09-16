@@ -119,8 +119,12 @@ export function renderRedactedCanvas(
       ctx.fillRect(x, y, bw, bh);
     } else if (isHovered || isSelected) {
       // ホバーまたは選択時の輪郭ハイライト
-      ctx.strokeStyle = "#38bdf8"; // 明るいシアン
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = isSelected ? "#38bdf8" : "rgba(56, 189, 248, 0.7)";
+      ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      if (isSelected) {
+        ctx.shadowColor = "#38bdf8";
+        ctx.shadowBlur = 8;
+      }
       ctx.setLineDash([]);
       ctx.strokeRect(x, y, bw, bh);
     }
@@ -214,21 +218,26 @@ function renderInlineBoxLabel(
   const label = getCompactLabel(box.type, box.label);
 
   // 文字色の決定（黒塗り/モザイク/ぼかしなら淡いグレー/白、白塗りなら濃いスレートグレー）
-  let textColor = "rgba(255, 255, 255, 0.85)";
+  let textColor = "rgba(255, 255, 255, 0.88)";
   if (style === "whiteout") {
-    textColor = "#475569";
+    textColor = "#334155";
   } else if (style === "mosaic" || style === "blur") {
     // モザイクやぼかしの上に文字を載せる場合は半透明背景を敷く
-    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.fillRect(x, y, bw, bh);
     textColor = "#f8fafc";
   }
 
-  // カテゴリごとの微細なアクセントカラー（文字色または微小ドット）
+  // カテゴリ・ラベルごとの微細なアクセントカラー
   if (style === "blackout") {
-    if (box.type === "person") textColor = "#fde68a"; // 淡いゴールド（人名）
-    else if (box.type === "company") textColor = "#7dd3fc"; // 淡いシアン（会社名）
+    const l = (box.label || "").toLowerCase();
+    if (box.type === "person" || l.includes("人名")) textColor = "#fde68a"; // 淡いゴールド（人名）
+    else if (box.type === "company" || l.includes("会社")) textColor = "#7dd3fc"; // 淡いシアン（会社名）
     else if (box.type === "face" || box.type === "avatar") textColor = "#e9d5ff"; // 淡いパープル（アイコン）
+    else if (l.includes("メール")) textColor = "#93c5fd"; // ブルー（メール）
+    else if (l.includes("パスワード")) textColor = "#fca5a5"; // コーラルレッド（パスワード）
+    else if (l.includes("電話") || l.includes("tel")) textColor = "#a7f3d0"; // ミント（電話）
+    else if (l.includes("住所")) textColor = "#fed7aa"; // オレンジ（住所）
     else if (box.type === "pii") textColor = "#fecdd3"; // 淡いローズ（連絡先）
   }
 
@@ -245,6 +254,21 @@ function renderInlineBoxLabel(
  * 矩形幅に無理なく収まる簡潔な日本語ラベル
  */
 function getCompactLabel(type: RedactType, defaultLabel: string): string {
+  const clean = (defaultLabel || "").trim();
+  if (clean && clean !== "手動指定") {
+    if (clean === "メール" || clean.includes("メール")) return "メール";
+    if (clean === "パスワード" || clean.includes("パスワード")) return "PW";
+    if (clean === "電話番号" || clean.includes("電話")) return "TEL";
+    if (clean === "住所" || clean.includes("住所")) return "住所";
+    if (clean === "会社名" || clean.includes("会社")) return "会社名";
+    if (clean === "人名" || clean.includes("人名")) return "人名";
+    if (clean === "金額" || clean.includes("金額")) return "金額";
+    if (clean !== "手動") {
+      // ユーザーの自由カスタム入力（長すぎる場合は省略）
+      return clean.length > 5 ? clean.slice(0, 4) + "…" : clean;
+    }
+  }
+
   switch (type) {
     case "person":
       return "人名";
