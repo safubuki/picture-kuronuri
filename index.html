@@ -45,17 +45,21 @@
         </button>
         <!-- AI Models & Storage Manager Button -->
         <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="端末内のAIモデル保存状況とストレージを確認">
-          💾 AI容量管理
+          <span class="btn-icon">💾</span><span class="btn-text">AI容量管理</span>
         </button>
         <button id="btnSampleHeader" class="btn btn-secondary btn-sm" title="チャット画面のサンプルで動作をテスト">
-          📱 サンプルで試す
+          <span class="btn-icon">📱</span><span class="btn-text">サンプル</span>
         </button>
         <button id="btnNewPhotoHeader" class="btn btn-camera btn-sm">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
           </svg>
-          撮影 / 選択
+          <span class="btn-text">撮影 / 選択</span>
+        </button>
+        <!-- Mobile Menu Trigger Button -->
+        <button id="btnHeaderMenu" class="btn btn-secondary btn-sm mobile-header-menu-btn" title="詳細設定・ツールを開く">
+          ⚙️
         </button>
       </div>
     </header>
@@ -211,10 +215,49 @@
         </div>
       </section>
 
-      <!-- Right: Controls & Summary Panel -->
-      <aside class="sidebar-panel" aria-label="設定およびAI連携">
+      <!-- Mobile Quick Action Bar (Only visible on mobile <= 768px) -->
+      <nav id="mobileActionBar" class="mobile-action-bar" aria-label="モバイルクイック操作">
+        <button id="btnMobileCopy" class="btn btn-primary btn-mobile-main" title="画像をクリップボードにコピー">
+          <span class="action-icon">📋</span>
+          <span class="action-text">コピー</span>
+        </button>
+        <button id="btnMobileDownload" class="btn btn-secondary btn-mobile-sub" title="PNG画像をダウンロード">
+          <span class="action-icon">📥</span>
+          <span class="action-text">保存</span>
+        </button>
+        <button id="btnMobileBadge" class="btn btn-secondary btn-mobile-badge" title="タップして保護箇所一覧を表示">
+          <span class="action-icon">🛡️</span>
+          <span id="mobileBadgeCount">0件</span>
+        </button>
+        <button id="btnMobileOpenSheet" class="btn btn-secondary btn-mobile-menu" title="詳細設定・補正メニューを開く">
+          <span class="action-icon">⚙️</span>
+          <span class="action-text">設定</span>
+        </button>
+      </nav>
+
+      <!-- Right: Controls & Summary Panel (Desktop: Sidebar, Mobile: Slide-up Sheet) -->
+      <aside class="sidebar-panel" id="sidebarPanel" aria-label="設定およびAI連携">
+        <!-- Mobile Bottom Sheet Header (Only visible on mobile) -->
+        <div class="sheet-header" id="sheetHeader">
+          <div class="sheet-drag-handle" id="sheetDragHandle"></div>
+          <div class="sheet-title-bar">
+            <div class="sheet-title">
+              <span>⚙️ 設定・詳細ツール</span>
+            </div>
+            <button id="btnCloseMobileSheet" class="sheet-close-btn" aria-label="メニューを閉じる">
+              ✕ 閉じる
+            </button>
+          </div>
+          <div class="sheet-nav-pills">
+            <button type="button" class="sheet-pill" data-target="cardFilterSettings">⚙️ フィルター</button>
+            <button type="button" class="sheet-pill" data-target="cardDistortion">📷 写真補正</button>
+            <button type="button" class="sheet-pill" data-target="cardAiExport">📝 AIテキスト</button>
+            <button type="button" class="sheet-pill" data-target="cardDetectedList">📋 保護一覧</button>
+          </div>
+        </div>
+
         <!-- AI Export Card -->
-        <div class="panel-card ai-export-card">
+        <div id="cardAiExport" class="panel-card ai-export-card">
           <div class="panel-title">
             <span>✨ AIに相談・エクスポート</span>
             <span class="panel-badge">安全</span>
@@ -267,7 +310,7 @@
         </div>
 
         <!-- Detection Statistics & Badges -->
-        <div class="panel-card">
+        <div id="cardStats" class="panel-card">
           <div class="panel-title">
             <span>検出サマリー</span>
             <span id="totalBadgeCount" class="panel-badge">0 件保護中</span>
@@ -296,7 +339,7 @@
         </div>
 
         <!-- Camera Distortion & Enhancement -->
-        <div class="panel-card">
+        <div id="cardDistortion" class="panel-card">
           <div class="panel-title">
             <span>📷 撮影写真の補正 (AI不使用)</span>
             <span class="panel-badge">歪み・傾き</span>
@@ -341,7 +384,7 @@
         </div>
 
         <!-- Detection Filter Settings -->
-        <div class="panel-card">
+        <div id="cardFilterSettings" class="panel-card">
           <div class="panel-title">
             <span>自動検出フィルター設定</span>
             <button id="btnReanalyze" class="btn btn-secondary btn-sm" title="現在の設定で再解析">
@@ -444,7 +487,7 @@
         </div>
 
         <!-- Detected Items Quick List -->
-        <div class="panel-card">
+        <div id="cardDetectedList" class="panel-card">
           <div class="panel-title" style="display: flex; justify-content: space-between; align-items: center;">
             <span>保護箇所一覧</span>
             <button id="btnSideClearAll" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 2px 8px; border-color: rgba(244, 63, 94, 0.4); color: #fda4af;" title="現在の黒塗りをすべて解除">
@@ -457,7 +500,23 @@
             </div>
           </div>
         </div>
+
+        <!-- Storage Management Entry in Sheet (Mobile accessible) -->
+        <div class="panel-card mobile-storage-card">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">💾 端末内AI・ストレージ管理</div>
+              <div style="font-size: 0.72rem; color: var(--text-dim);">極小LLM (Qwen2.5) / OCRキャッシュの管理・削除</div>
+            </div>
+            <button id="btnOpenStorageModalFromSheet" class="btn btn-secondary btn-sm">
+              管理を開く
+            </button>
+          </div>
+        </div>
       </aside>
+
+      <!-- Mobile Sheet Backdrop (Tap to close) -->
+      <div id="sheetBackdrop" class="sheet-backdrop"></div>
     </main>
 
     <!-- Realtime Camera Viewfinder Modal -->

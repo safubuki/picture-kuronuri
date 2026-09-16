@@ -124,6 +124,20 @@ const detectedItemsList = document.getElementById("detectedItemsList") as HTMLDi
 const toast = document.getElementById("toast") as HTMLDivElement;
 const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 
+// Mobile Quick Bar & Sheet Drawer Elements
+const btnMobileCopy = document.getElementById("btnMobileCopy") as HTMLButtonElement | null;
+const btnMobileDownload = document.getElementById("btnMobileDownload") as HTMLButtonElement | null;
+const btnMobileBadge = document.getElementById("btnMobileBadge") as HTMLButtonElement | null;
+const mobileBadgeCount = document.getElementById("mobileBadgeCount") as HTMLSpanElement | null;
+const btnMobileOpenSheet = document.getElementById("btnMobileOpenSheet") as HTMLButtonElement | null;
+const btnHeaderMenu = document.getElementById("btnHeaderMenu") as HTMLButtonElement | null;
+const sidebarPanel = document.getElementById("sidebarPanel") as HTMLElement | null;
+const sheetBackdrop = document.getElementById("sheetBackdrop") as HTMLDivElement | null;
+const btnCloseMobileSheet = document.getElementById("btnCloseMobileSheet") as HTMLButtonElement | null;
+const sheetDragHandle = document.getElementById("sheetDragHandle") as HTMLDivElement | null;
+const sheetHeader = document.getElementById("sheetHeader") as HTMLDivElement | null;
+const btnOpenStorageModalFromSheet = document.getElementById("btnOpenStorageModalFromSheet") as HTMLButtonElement | null;
+
 // Drawing & Line Snap State Variables
 let isDrawing = false;
 let drawStartX = 0;
@@ -702,6 +716,8 @@ function syncUiWithState(state: AppState): void {
   const hasImage = !!state.sourceImage;
   btnCopyImage.disabled = !hasImage;
   btnDownloadImage.disabled = !hasImage;
+  if (btnMobileCopy) btnMobileCopy.disabled = !hasImage;
+  if (btnMobileDownload) btnMobileDownload.disabled = !hasImage;
   btnCopyRedactedText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
   btnCompare.disabled = !hasImage;
   if (btnClearAllBoxes) btnClearAllBoxes.disabled = !hasImage || state.boxes.length === 0;
@@ -726,6 +742,7 @@ function syncUiWithState(state: AppState): void {
   }
 
   totalBadgeCount.textContent = `${enabledCount} 件保護中`;
+  if (mobileBadgeCount) mobileBadgeCount.textContent = `${enabledCount}件`;
   statFace.textContent = String(faceCount);
   statPerson.textContent = String(personCount);
   statCompany.textContent = String(companyCount);
@@ -1880,6 +1897,142 @@ function initEvents(): void {
     activeSnappedLine = null;
     updateCanvasRender();
   });
+
+  // モバイル専用スライドアップメニューとクイック操作の初期化
+  initMobileSheetAndActions();
+}
+
+/**
+ * スマホ専用スライドアップメニュー（ボトムシート）およびクイック操作バーの初期化
+ */
+function initMobileSheetAndActions(): void {
+  const openSheet = (targetCardId?: string) => {
+    if (sidebarPanel) {
+      sidebarPanel.classList.add("sheet-open");
+      document.body.classList.add("sheet-is-open");
+    }
+    if (sheetBackdrop) {
+      sheetBackdrop.classList.add("active");
+    }
+    if (targetCardId) {
+      setTimeout(() => {
+        const targetEl = document.getElementById(targetCardId);
+        if (targetEl && sidebarPanel) {
+          targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 150);
+    }
+  };
+
+  const closeSheet = () => {
+    if (sidebarPanel) {
+      sidebarPanel.classList.remove("sheet-open");
+      document.body.classList.remove("sheet-is-open");
+    }
+    if (sheetBackdrop) {
+      sheetBackdrop.classList.remove("active");
+    }
+  };
+
+  // モバイルクイックバー操作
+  btnMobileCopy?.addEventListener("click", () => {
+    btnCopyImage.click();
+  });
+
+  btnMobileDownload?.addEventListener("click", () => {
+    btnDownloadImage.click();
+  });
+
+  btnMobileOpenSheet?.addEventListener("click", () => {
+    openSheet();
+  });
+
+  btnHeaderMenu?.addEventListener("click", () => {
+    openSheet();
+  });
+
+  btnMobileBadge?.addEventListener("click", () => {
+    openSheet("cardDetectedList");
+  });
+
+  // シート閉じる操作
+  btnCloseMobileSheet?.addEventListener("click", closeSheet);
+  sheetBackdrop?.addEventListener("click", closeSheet);
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && sidebarPanel?.classList.contains("sheet-open")) {
+      closeSheet();
+    }
+  });
+
+  // シート内クイックナビゲーション（ピル）
+  const pills = document.querySelectorAll<HTMLButtonElement>(".sheet-pill");
+  pills.forEach((pill) => {
+    pill.addEventListener("click", (e) => {
+      const targetId = (e.currentTarget as HTMLElement).getAttribute("data-target");
+      if (targetId) {
+        const targetEl = document.getElementById(targetId);
+        if (targetEl) {
+          targetEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
+    });
+  });
+
+  // シート内からAI容量管理モーダルを開く
+  btnOpenStorageModalFromSheet?.addEventListener("click", () => {
+    closeSheet();
+    const btnOpenStorage = document.getElementById("btnOpenStorageModal") as HTMLButtonElement | null;
+    btnOpenStorage?.click();
+  });
+
+  // スワイプダウン（下方向ドラッグ）で閉じるジェスチャー
+  let touchStartY = 0;
+  let touchCurrentY = 0;
+  let isTouchingHandle = false;
+
+  const onTouchStart = (e: TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY;
+      touchCurrentY = touchStartY;
+      isTouchingHandle = true;
+    }
+  };
+
+  const onTouchMove = (e: TouchEvent) => {
+    if (!isTouchingHandle || e.touches.length !== 1) return;
+    touchCurrentY = e.touches[0].clientY;
+    const deltaY = touchCurrentY - touchStartY;
+    if (deltaY > 0 && sidebarPanel) {
+      sidebarPanel.style.transform = `translateY(${Math.min(deltaY, 220)}px)`;
+      sidebarPanel.style.transition = "none";
+    }
+  };
+
+  const onTouchEnd = () => {
+    if (!isTouchingHandle) return;
+    isTouchingHandle = false;
+    const deltaY = touchCurrentY - touchStartY;
+    if (sidebarPanel) {
+      sidebarPanel.style.transition = "";
+      sidebarPanel.style.transform = "";
+    }
+    if (deltaY > 70) {
+      closeSheet();
+    }
+  };
+
+  if (sheetDragHandle) {
+    sheetDragHandle.addEventListener("touchstart", onTouchStart, { passive: true });
+    sheetDragHandle.addEventListener("touchmove", onTouchMove, { passive: true });
+    sheetDragHandle.addEventListener("touchend", onTouchEnd, { passive: true });
+  }
+
+  if (sheetHeader) {
+    sheetHeader.addEventListener("touchstart", onTouchStart, { passive: true });
+    sheetHeader.addEventListener("touchmove", onTouchMove, { passive: true });
+    sheetHeader.addEventListener("touchend", onTouchEnd, { passive: true });
+  }
 }
 
 function initPwaAndStorageManager(): void {

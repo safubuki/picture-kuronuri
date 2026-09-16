@@ -926,12 +926,41 @@ input:checked + .slider:before {
 }
 
 /* ==========================================================================
+   Mobile Action Bar & Slide-up Sheet (Bottom Sheet Drawer)
+   ========================================================================== */
+
+/* Hidden on desktop */
+.mobile-action-bar {
+  display: none;
+}
+
+.mobile-header-menu-btn {
+  display: none;
+}
+
+.sheet-header {
+  display: none;
+}
+
+.sheet-backdrop {
+  display: none;
+}
+
+.sheet-nav-pills {
+  display: none;
+}
+
+.mobile-storage-card {
+  display: none;
+}
+
+/* ==========================================================================
    Responsive Mobile & Tablet Design
    ========================================================================== */
 
 @media (max-width: 900px) {
   .app-header {
-    padding: 0.6rem 1rem;
+    padding: 0.55rem 0.85rem;
     gap: 0.5rem;
   }
 
@@ -941,12 +970,302 @@ input:checked + .slider:before {
   }
 }
 
+@media (max-width: 768px) {
+  /* Prevent background scrolling when sheet is open */
+  body.sheet-is-open {
+    overflow: hidden !important;
+  }
+
+  /* Main layout on mobile: single clean screen */
+  .main-layout {
+    display: flex;
+    flex-direction: column;
+    padding: 0.5rem 0.5rem calc(4.6rem + env(safe-area-inset-bottom, 0px));
+    gap: 0.5rem;
+    min-height: calc(100vh - 65px);
+  }
+
+  .workspace-card {
+    border-radius: var(--radius-md);
+    height: auto !important;
+    min-height: 440px;
+    max-height: none !important;
+    position: relative !important;
+    top: 0 !important;
+  }
+
+  .canvas-viewport {
+    padding: 0.5rem;
+    min-height: 380px;
+    max-height: 65vh;
+  }
+
+  /* Zoom controls placed cleanly above mobile action bar */
+  .zoom-controls {
+    bottom: calc(4.4rem + env(safe-area-inset-bottom, 0px)) !important;
+    right: 0.75rem !important;
+    z-index: 35 !important;
+  }
+
+  /* Fixed Mobile Quick Action Bar at bottom */
+  .mobile-action-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 850;
+    background: rgba(15, 23, 42, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(56, 189, 248, 0.25);
+    padding: 0.5rem 0.75rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+    gap: 0.45rem;
+    align-items: center;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
+  }
+
+  .btn-mobile-main {
+    flex: 1.6;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.88rem;
+    font-weight: 700;
+    gap: 0.35rem;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 3px 12px rgba(2, 132, 199, 0.4);
+    background: linear-gradient(135deg, #0284c7, #2563eb);
+    color: #ffffff;
+  }
+
+  .btn-mobile-sub {
+    flex: 1;
+    padding: 0.6rem 0.65rem;
+    font-size: 0.82rem;
+    gap: 0.25rem;
+    border-radius: var(--radius-sm);
+  }
+
+  .btn-mobile-badge {
+    flex: 0 0 auto;
+    padding: 0.6rem 0.65rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    color: #38bdf8;
+    border-color: rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.12);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+  }
+
+  .btn-mobile-menu {
+    flex: 0 0 auto;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+    cursor: pointer;
+  }
+
+  .mobile-header-menu-btn {
+    display: inline-flex;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.85rem;
+  }
+
+  /* Sheet Backdrop (Blur & Dim overlay) */
+  .sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.3s;
+  }
+
+  .sheet-backdrop.active {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  /* Slide-up Sheet (Sidebar Panel transformed on Mobile) */
+  .sidebar-panel {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    z-index: 1001 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 84vh !important;
+    max-height: 84vh !important;
+    background: #0f172a !important;
+    border-top: 2px solid rgba(56, 189, 248, 0.45) !important;
+    border-radius: 20px 20px 0 0 !important;
+    box-shadow: 0 -16px 48px rgba(0, 0, 0, 0.8), 0 0 30px rgba(56, 189, 248, 0.2) !important;
+    padding: 0 1rem calc(2.5rem + env(safe-area-inset-bottom, 0px)) !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    transform: translateY(100%);
+    transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.85rem !important;
+    box-sizing: border-box;
+  }
+
+  .sidebar-panel.sheet-open {
+    transform: translateY(0) !important;
+  }
+
+  /* Sheet Header Component */
+  .sheet-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    background: #0f172a;
+    padding: 0.65rem 0 0.5rem;
+    z-index: 20;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin: 0 -1rem 0.5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .sheet-drag-handle {
+    width: 44px;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.28);
+    border-radius: 9999px;
+    margin-bottom: 0.65rem;
+    cursor: grab;
+    transition: background 0.2s;
+  }
+
+  .sheet-drag-handle:active {
+    background: var(--primary-light);
+  }
+
+  .sheet-title-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 0.45rem;
+  }
+
+  .sheet-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .sheet-close-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: var(--transition);
+  }
+
+  .sheet-close-btn:hover {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  /* Quick Navigation Pills */
+  .sheet-nav-pills {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    width: 100%;
+    padding: 0.35rem 0 0.2rem;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sheet-nav-pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sheet-pill {
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-weight: 600;
+    padding: 0.28rem 0.65rem;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+    outline: none;
+  }
+
+  .sheet-pill:hover, .sheet-pill:active {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.16);
+    border-color: rgba(56, 189, 248, 0.4);
+  }
+
+  .mobile-storage-card {
+    display: block;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+  }
+
+  /* Perspective Bar Grid Fix: 2x2 Clean Layout */
+  .perspective-bar {
+    padding: 0.55rem 0.75rem !important;
+    gap: 0.45rem !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .perspective-buttons {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.4rem !important;
+    width: 100% !important;
+  }
+
+  .perspective-buttons #btnApplyPerspective {
+    grid-column: span 2 !important;
+  }
+
+  .perspective-buttons .btn-sm {
+    padding: 0.45rem 0.4rem !important;
+    font-size: 0.74rem !important;
+    text-align: center;
+  }
+}
+
 @media (max-width: 680px) {
   /* Header Mobile Optimization */
   .app-header {
     flex-wrap: wrap;
-    padding: 0.5rem 0.75rem;
-    gap: 0.4rem 0.75rem;
+    padding: 0.45rem 0.65rem;
+    gap: 0.35rem 0.5rem;
+    overflow-x: clip;
   }
 
   .brand-title {
@@ -964,12 +1283,23 @@ input:checked + .slider:before {
 
   .header-actions {
     margin-left: auto;
-    gap: 0.35rem;
+    gap: 0.3rem;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
   }
 
   .header-actions .btn-sm {
     padding: 0.35rem 0.55rem;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
+  }
+
+  #btnNewPhotoHeader {
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   /* セキュリティバッジをヘッダーの2行目に綺麗に中央配置 */
@@ -984,24 +1314,21 @@ input:checked + .slider:before {
     border-color: rgba(16, 185, 129, 0.2);
   }
 
-  /* Main Workspace Layout */
-  .main-layout {
-    padding: 0.5rem 0.5rem 3.5rem;
-    gap: 0.75rem;
-  }
-
-  .workspace-card {
-    border-radius: var(--radius-md);
-    min-height: 420px;
-  }
-
-  /* ワークスペースツールバー（スワイプ可能な横並び） */
+  /* ワークスペースツールバー（スワイプ可能な横スクロール） */
   .workspace-toolbar {
-    padding: 0.4rem 0.6rem;
-    gap: 0.35rem;
+    padding: 0.35rem 0.5rem;
+    gap: 0.3rem;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     flex-wrap: nowrap;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+  }
+
+  .workspace-toolbar::after {
+    content: "";
+    flex-shrink: 0;
+    width: 0.75rem;
   }
 
   .tool-group {
@@ -1010,43 +1337,8 @@ input:checked + .slider:before {
   }
 
   .tool-btn {
-    padding: 0.3rem 0.5rem;
-    font-size: 0.75rem;
-  }
-
-  /* キャンバスビューポート（余白を詰めて写真を最大限大きく） */
-  .canvas-viewport {
-    padding: 0.5rem;
-    min-height: 360px;
-  }
-
-  #renderCanvas {
-    max-height: 70vh;
-  }
-
-  /* 台形補正バー（スマホ・レスポンシブ） */
-  .perspective-bar {
-    padding: 0.5rem 0.75rem !important;
-    gap: 0.4rem !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-
-  .perspective-info {
-    font-size: 0.76rem !important;
-  }
-
-  .perspective-buttons {
-    width: 100%;
-    display: grid !important;
-    grid-template-columns: 1fr 1fr 1.3fr !important;
-    gap: 0.35rem !important;
-  }
-
-  .perspective-buttons .btn-sm {
-    padding: 0.4rem 0.3rem !important;
-    font-size: 0.72rem !important;
-    text-align: center;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.74rem;
   }
 
   /* ドロップゾーン */
@@ -1093,7 +1385,26 @@ input:checked + .slider:before {
     font-size: 0.78rem;
     justify-content: center;
     text-align: center;
-    bottom: 1rem;
+    bottom: 4.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  /* On narrow screens, hide text in secondary header buttons to prevent cutting off 撮影/選択 */
+  #btnOpenStorageModal .btn-text,
+  #btnSampleHeader .btn-text {
+    display: none;
+  }
+
+  #btnOpenStorageModal,
+  #btnSampleHeader {
+    padding: 0.35rem 0.45rem;
+    min-width: 32px;
+    justify-content: center;
+  }
+
+  .brand-title {
+    font-size: 0.95rem;
   }
 }
 
@@ -1275,89 +1586,6 @@ input:checked + .slider:before {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-}
-
-/* Perspective Correction Step Toolbar */
-.perspective-bar {
-  background: rgba(15, 23, 42, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(56, 189, 248, 0.35);
-  padding: 0.65rem 1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  z-index: 20;
-}
-
-.perspective-info {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  flex-wrap: wrap;
-}
-
-.perspective-step-badge {
-  background: linear-gradient(135deg, #0284c7, #2563eb);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 0.72rem;
-  padding: 3px 8px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
-  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.4);
-}
-
-.perspective-msg {
-  font-size: 0.8rem;
-  color: #e2e8f0;
-  font-weight: 500;
-}
-
-.perspective-buttons {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex-wrap: wrap;
-}
-
-.btn-highlight-action {
-  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%) !important;
-  color: #ffffff !important;
-  font-weight: 700 !important;
-  box-shadow: 0 3px 12px rgba(2, 132, 199, 0.45) !important;
-  border: none !important;
-}
-
-.btn-highlight-action:hover {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
-}
-
-@media (max-width: 768px) {
-  .perspective-bar {
-    flex-direction: column;
-    align-items: stretch;
-    padding: 0.5rem 0.75rem;
-    gap: 0.5rem;
-  }
-
-  .perspective-info {
-    font-size: 0.75rem;
-  }
-
-  .perspective-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.4rem;
-    width: 100%;
-  }
-
-  .perspective-buttons .btn-highlight-action {
-    grid-column: span 2;
-  }
 }
 
 .guide-instruction-pill {
