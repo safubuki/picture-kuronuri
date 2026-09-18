@@ -166,13 +166,21 @@ export function detectPersonsInText(text: string): PersonMatch[] {
     }
 
     if (matchSurname(candidateSurname)) {
-      const isCovered = results.some(r => start >= r.startIndex && end <= r.endIndex);
+      // 直後にカッコ付き英字名（例: " (Aoi Sasaki)" や "（Aoi Sasaki）"）が続く場合は一緒に人名としてカバー
+      let finalEnd = end;
+      const remaining = text.slice(end);
+      const parenMatch = remaining.match(/^[\s　]*[（(][a-zA-Z\s.-]+[）)]/);
+      if (parenMatch) {
+        finalEnd = end + parenMatch[0].length;
+      }
+
+      const isCovered = results.some(r => start >= r.startIndex && finalEnd <= r.endIndex);
       if (!isCovered) {
         results.push({
-          matchedText: text.slice(start, end),
+          matchedText: text.slice(start, finalEnd),
           nameOnly: matchedFull,
           startIndex: start,
-          endIndex: end,
+          endIndex: finalEnd,
           reason: "full_name_pattern"
         });
       }

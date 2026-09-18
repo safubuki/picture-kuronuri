@@ -262,15 +262,16 @@ export async function analyzeImageForRedaction(
       }
     }
 
-    // D. PII（電話、メール、住所、金額、SNS ID）判定
+    // D. PII（電話、メール、住所、金額、SNS ID、パスワード、クレジットカード）判定
     if (options.detectPii) {
       const piiMatches = detectPiiInText(lineText);
       for (const p of piiMatches) {
         const rect = calculateBBoxForRange(line, p.startIndex, p.endIndex);
         if (rect) {
+          const boxType = p.category === "person" ? "person" : "pii";
           boxes.push({
             id: `pii-${p.category}-${line.bbox.x0}-${p.startIndex}`,
-            type: "pii",
+            type: boxType,
             label: p.label,
             text: p.matchedText,
             reason: `特定個人情報 (${p.label})`,
@@ -394,7 +395,8 @@ export async function analyzeImageForRedaction(
 
   // 重複矩形の整理（同じ領域に対する完全重複・包含を排除）
   const dedupedBoxes = removeDuplicateBoxes(boxes);
-  const finalBoxes = isSampleOrPreloaded ? dedupedBoxes : mergeAdjacentBoxes(dedupedBoxes);
+  // 同一行で隣接する同種ボックスを常に結合（サンプル画像でも住所や人名の二重ボックスを確実に防止）
+  const finalBoxes = mergeAdjacentBoxes(dedupedBoxes);
 
   onProgress?.({ status: "解析完了", progress: 1.0 });
 

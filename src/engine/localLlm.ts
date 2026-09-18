@@ -214,3 +214,110 @@ export async function extractConfidentialKeywordsWithLlm(
     return [];
   }
 }
+
+/**
+ * OCR認識テキスト（または崩れた伏字テキスト）をLLMで文脈解析し、
+ * 文字化け・誤字・不自然な改行を自動修復した上で、
+ * 個人情報（人名、会社名、電話番号、住所、カード情報、パスワード等）を伏字化した
+ * 高品質な日本語文章として清書・出力する。
+ */
+export async function cleanAndRedactTextWithLlm(
+  inputRawText: string,
+  onProgress?: (status: string, progress?: number) => void
+): Promise<string> {
+  if (!inputRawText || inputRawText.trim().length === 0) {
+    return "";
+  }
+
+  onProgress?.("文脈理解AI（LLM）を準備中...", 0.1);
+  const pipe = await getLocalLlmPipeline((status, p) => {
+    onProgress?.(status, p);
+  });
+
+  if (!pipe) {
+    throw new Error("文脈理解AIパイプラインの取得に失敗しました");
+  }
+
+  onProgress?.("文章の文脈解析と誤字修復・伏字化を実行中...", 0.6);
+
+  // 長文の場合は先頭1200文字までに制限（ブラウザ内レスポンス速度とメモリ保護のため）
+  const textSnippet = inputRawText.length > 1200 ? inputRawText.slice(0, 1200) : inputRawText;
+
+  const messages = [
+    {
+      role: "system",
+      content:
+        "あなたはテキストの誤字脱字・文字化けを校正し、プライバシー保護のために機密情報を伏字化する専門AIです。" +
+        "入力テキストの文字化けや不自然な改行・スペースを文脈から補正し、自然で綺麗な日本語に整形した上で、" +
+        "個人情報や機密情報を以下の角括弧タグに置き換えて出力してください。\n" +
+        "【置換ルール】\n" +
+        "- 人名（姓・名） -> [人名]\n" +
+        "- 会社名・組織名・部署名 -> [会社名]\n" +
+        "- 住所・所在地 -> [住所]\n" +
+        "- 電話番号・FAX -> [電話番号]\n" +
+        "- メールアドレス -> [メールアドレス]\n" +
+        "- クレジットカード番号 -> [カード情報]\n" +
+        "- パスワード・暗証番号 -> [パスワード]\n" +
+        "- 取引金額・口座情報 -> [金額] / [口座情報]\n" +
+        "【注意事項】\n" +
+        "- 挨拶や前置き、解説（例：「以下が清書結果です」等）は一切出力しないでください。\n" +
+        "- 清書・伏字化した本文テキストのみを直接出力してください。"
+    },
+    {
+      role: "user",
+      content:
+        "テキスト:\n山田 太 郎 様\nお電 話: 090-1234-5678\nメー ル: yamada@example.com\nご住 所: 東京都千代田区1-1-1\nパス ワード: P@ssw0rd123"
+    },
+    {
+      role: "assistant",
+      content:
+        "[人名] 様\nお電話: [電話番号]\nメール: [メールアドレス]\nご住所: [住所]\nパスワード: [パスワード]"
+    },
+    {
+      role: "user",
+      content: `テキスト:\n${textSnippet}`
+    }
+  ];
+
+  let rawOutput = "";
+  try {
+    const result = await pipe(messages, {
+      max_new_tokens: 380,
+      temperature: 0.1,
+      do_sample: false
+    });
+
+    const generated = result?.[0]?.generated_text;
+    if (Array.isArray(generated)) {
+      const lastMsg = generated[generated.length - 1];
+      rawOutput = typeof lastMsg === "object" ? lastMsg.content || "" : String(lastMsg);
+    } else if (typeof generated === "string") {
+      rawOutput = generated;
+    }
+  } catch (chatErr) {
+    console.warn("[LocalLlm] Chat template execution failed, fallback to plain text:", chatErr);
+    const plainPrompt =
+      "指示: 以下のテキストの文字化けや誤字を文脈から直し、人名・会社名・住所・電話番号・メール・カード番号・パスワードを [人名] [住所] [カード情報] [パスワード] 等の角括弧タグに置き換えて清書してください。解説は不要です。\n\n" +
+      `テキスト:\n${textSnippet}\n\n清書テキスト:\n`;
+
+    const result = await pipe(plainPrompt, {
+      max_new_tokens: 380,
+      temperature: 0.1,
+      do_sample: false
+    });
+    rawOutput = result?.[0]?.generated_text || "";
+    // プロンプト部分が含まれていれば除去
+    if (rawOutput.includes("清書テキスト:\n")) {
+      rawOutput = rawOutput.split("清書テキスト:\n")[1] || rawOutput;
+    }
+  }
+
+  // 出力のクレンジング（前置きやエコーバックを除去）
+  let cleaned = rawOutput.trim();
+  cleaned = cleaned.replace(/^(はい、?|かしこまりました|承知いたしました|以下が|清書結果[：:]?|伏字テキスト[：:]?).*?\n+/gi, "");
+  cleaned = cleaned.replace(/^```[\w]*\n([\s\S]*?)\n```$/g, "$1"); // マークダウンコードブロックの剥がし
+
+  onProgress?.("清書完了", 1.0);
+  return cleaned || inputRawText;
+}
+

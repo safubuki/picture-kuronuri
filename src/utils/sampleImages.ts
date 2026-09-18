@@ -387,3 +387,451 @@ export function generateSkewedChatSampleImage(): { dataUrl: string } {
   return { dataUrl: outCanvas.toDataURL("image/png") };
 }
 
+/**
+ * プライベート利用（個人のライフスタイルサービス・マイページ）のダッシュボードサンプル画像を生成
+ * 顔写真、個人メールアドレス、自宅住所、電話番号、パスワード、サブスク金額などを自然に配置
+ */
+export function generateDashboardSampleImage(): SampleChatResult {
+  const canvas = document.createElement("canvas");
+  const w = 820;
+  const h = 1180;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return { dataUrl: "", ocrData: { fullText: "", lines: [], symbols: [], scale: 1 }, avatars: [] };
+  }
+
+  const lines: OcrLine[] = [];
+  const allSymbols: OcrChar[] = [];
+
+  // ヘルパー：Canvasのフォント幅に基づいた精密な行情報の登録
+  const recordLine = (text: string, x: number, y: number, font: string = "16px sans-serif", lineHeight: number = 22) => {
+    ctx.font = font;
+    const lineSymbols: OcrChar[] = [];
+    let currentX = x;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const charWidth = ctx.measureText(char).width;
+      const cx0 = Math.round(currentX);
+      const cx1 = Math.round(currentX + charWidth);
+      const cy0 = y;
+      const cy1 = y + lineHeight;
+
+      const symbolObj: OcrChar = {
+        text: char,
+        bbox: { x0: cx0, y0: cy0, x1: cx1, y1: cy1 },
+        confidence: 99
+      };
+      lineSymbols.push(symbolObj);
+      allSymbols.push(symbolObj);
+
+      currentX += charWidth;
+    }
+
+    lines.push({
+      text,
+      rawText: text,
+      bbox: {
+        x0: x,
+        y0: y,
+        x1: Math.round(currentX),
+        y1: y + lineHeight
+      },
+      words: [{
+        text,
+        bbox: { x0: x, y0: y, x1: Math.round(currentX), y1: y + lineHeight },
+        confidence: 99
+      }],
+      symbols: lineSymbols,
+      alignedSymbols: lineSymbols,
+      confidence: 99
+    });
+  };
+
+  // 1. 背景（モダンなオフホワイト・スレート背景）
+  ctx.fillStyle = "#f8fafc";
+  ctx.fillRect(0, 0, w, h);
+
+  // 2. 上部ヘッダーバー（日常使いのWebサービス）
+  ctx.fillStyle = "#1e293b";
+  ctx.fillRect(0, 0, w, 70);
+
+  // サービスロゴ（WebサイトのUI装飾）
+  ctx.fillStyle = "#38bdf8";
+  ctx.beginPath();
+  ctx.arc(38, 35, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 20px sans-serif";
+  ctx.fillText("🌿 LifeSync Hub", 62, 42);
+
+  // ヘッダー右側（ログインユーザーミニ情報）
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "14px sans-serif";
+  ctx.fillText("ログイン中:", w - 210, 41);
+  ctx.fillStyle = "#f1f5f9";
+  ctx.font = "bold 14px sans-serif";
+  ctx.fillText("佐々木 葵", w - 130, 41);
+  recordLine("佐々木 葵", w - 130, 26, "bold 14px sans-serif", 20);
+
+  // 3. パンくずリスト & ページタイトル
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("ホーム  >  マイアカウント  >  プロフィール・セキュリティ設定", 35, 104);
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 24px sans-serif";
+  ctx.fillText("👤 マイアカウント管理ダッシュボード", 35, 142);
+
+  // 4. カード1: ユーザープロフィール（個人情報 & 顔写真）
+  const card1Y = 175;
+  const card1H = 390;
+  drawCard(ctx, 35, card1Y, w - 70, card1H, "プロフィール・連絡先情報");
+
+  // 顔写真（アバター）座標: カードヘッダー線（card1Y + 46）の下に十分なマージンを空けて配置
+  const faceX = 55;
+  const faceY = card1Y + 70;
+  const faceSize = 120;
+  const avatars = [
+    { x: faceX, y: faceY, width: faceSize, height: faceSize }
+  ];
+
+  // 本人の顔写真ポートレート描画（プライベート感のある普段着・自撮り風）
+  drawRealisticPortrait(ctx, faceX, faceY, faceSize);
+
+  // 写真下の変更リンク風テキスト
+  ctx.fillStyle = "#0284c7";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("📷 プロフィール写真を変更", faceX, faceY + faceSize + 22);
+
+  // 個人情報フィールド群（右側エリア）
+  const infoX = 205;
+  let curY = card1Y + 70;
+
+  // 氏名（お名前）
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("お名前（本名）", infoX, curY);
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 18px sans-serif";
+  ctx.fillText("佐々木 葵（Aoi Sasaki）", infoX, curY + 24);
+  recordLine("佐々木 葵（Aoi Sasaki）", infoX, curY + 4, "bold 18px sans-serif", 24);
+  curY += 60;
+
+  // アカウントID / ニックネーム
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("ユーザーID / 表示ネーム", infoX, curY);
+  ctx.fillStyle = "#334155";
+  ctx.font = "15px sans-serif";
+  ctx.fillText("@aoi_lifestyle", infoX, curY + 20);
+  recordLine("@aoi_lifestyle", infoX, curY + 4, "15px sans-serif", 20);
+  curY += 54;
+
+  // メールアドレス
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("登録メールアドレス（個人）", infoX, curY);
+  ctx.fillStyle = "#0284c7";
+  ctx.font = "bold 16px sans-serif";
+  ctx.fillText("Email: aoi.sasaki92@sample-mail.jp", infoX, curY + 22);
+  recordLine("Email: aoi.sasaki92@sample-mail.jp", infoX, curY + 4, "bold 16px sans-serif", 22);
+  curY += 54;
+
+  // 携帯電話番号
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("連絡先電話番号", infoX, curY);
+  ctx.fillStyle = "#1e293b";
+  ctx.font = "16px sans-serif";
+  ctx.fillText("TEL: 090-6543-2109", infoX, curY + 20);
+  recordLine("TEL: 090-6543-2109", infoX, curY + 4, "16px sans-serif", 20);
+  curY += 54;
+
+  // 自宅住所（お届け先）
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("自宅お届け先住所", infoX, curY);
+  ctx.fillStyle = "#1e293b";
+  ctx.font = "15px sans-serif";
+  ctx.fillText("住所: 東京都世田谷区桜新町2-15-8 メゾンサクラ302", infoX, curY + 20);
+  recordLine("住所: 東京都世田谷区桜新町2-15-8 メゾンサクラ302", infoX, curY + 4, "15px sans-serif", 20);
+
+  // 5. カード2: プライベート サブスク & 決済情報
+  const card2Y = card1Y + card1H + 20;
+  const card2H = 265;
+  drawCard(ctx, 35, card2Y, w - 70, card2H, "💳 サブスクリプション & お支払い設定");
+
+  let pY = card2Y + 64;
+  // ご利用プラン
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("現在のご利用プラン", 55, pY);
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 16px sans-serif";
+  ctx.fillText("プレミアム会員（個人・月額プラン）", 55, pY + 22);
+
+  // 月額料金
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("月額利用料金", 480, pY);
+  ctx.fillStyle = "#e11d48";
+  ctx.font = "bold 20px sans-serif";
+  ctx.fillText("月額: 1,480円 (税込)", 480, pY + 22);
+  recordLine("月額: 1,480円 (税込)", 480, pY + 2, "bold 20px sans-serif", 24);
+  pY += 60;
+
+  // 登録クレジットカード
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("お支払いカード（プライベート）", 55, pY);
+  ctx.fillStyle = "#1e293b";
+  ctx.font = "15px sans-serif";
+  ctx.fillText("お支払いカード: JCB (下4桁: 5123) 有効期限: 11/29", 55, pY + 20);
+  recordLine("お支払いカード: JCB (下4桁: 5123) 有効期限: 11/29", 55, pY + 4, "15px sans-serif", 20);
+  pY += 55;
+
+  // 次回更新日 & 請求先
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("次回自動更新日", 55, pY);
+  ctx.fillStyle = "#334155";
+  ctx.font = "15px sans-serif";
+  ctx.fillText("2026年10月1日（毎月1日自動決済）", 55, pY + 20);
+
+  // 6. カード3: セキュリティ & ログイン情報
+  const card3Y = card2Y + card2H + 20;
+  const card3H = 260;
+  drawCard(ctx, 35, card3Y, w - 70, card3H, "🔒 セキュリティ & ログイン管理");
+
+  let sY = card3Y + 64;
+  // パスワード
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("現在のログインパスワード", 55, sY);
+  ctx.fillStyle = "#1e293b";
+  ctx.font = "16px sans-serif";
+  ctx.fillText("パスワード: ●●●●●●●● (Password: aoi#Star982!)", 55, sY + 22);
+  recordLine("パスワード: ●●●●●●●● (Password: aoi#Star982!)", 55, sY + 4, "16px sans-serif", 22);
+  sY += 58;
+
+  // 2要素認証
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("二要素認証ステータス", 55, sY);
+  ctx.fillStyle = "#16a34a";
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("✓ 有効（認証アプリ設定済み: iPhone 15）", 55, sY + 20);
+  sY += 52;
+
+  // 最終ログイン履歴
+  ctx.fillStyle = "#64748b";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("最終ログイン日時・接続元", 55, sY);
+  ctx.fillStyle = "#475569";
+  ctx.font = "14px sans-serif";
+  ctx.fillText("最終ログイン: 2026/09/18 07:30 (東京都世田谷区)", 55, sY + 20);
+  recordLine("最終ログイン: 2026/09/18 07:30 (東京都世田谷区)", 55, sY + 4, "14px sans-serif", 20);
+
+  const fullText = lines.map(l => l.text).join("\n");
+
+  return {
+    dataUrl: canvas.toDataURL("image/png"),
+    ocrData: {
+      fullText,
+      lines,
+      symbols: allSymbols,
+      scale: 1
+    },
+    avatars
+  };
+}
+
+/**
+ * ダッシュボード用カード枠を描画
+ */
+function drawCard(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  title: string
+): void {
+  ctx.save();
+  // カード背景
+  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = "rgba(15, 23, 42, 0.08)";
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 4;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 14);
+  ctx.fill();
+
+  // カード枠線
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // カードヘッダー仕切り線
+  ctx.beginPath();
+  ctx.moveTo(x + 16, y + 46);
+  ctx.lineTo(x + w - 16, y + 46);
+  ctx.strokeStyle = "#f1f5f9";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // タイトル
+  ctx.fillStyle = "#1e293b";
+  ctx.font = "bold 17px sans-serif";
+  ctx.fillText(title, x + 20, y + 31);
+  ctx.restore();
+}
+
+/**
+ * プライベート感のあるナチュラルな人物顔写真ポートレート（自撮り・普段着風）を描画
+ */
+function drawRealisticPortrait(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number
+): void {
+  ctx.save();
+
+  // クリップ（角丸）
+  ctx.beginPath();
+  ctx.roundRect(x, y, size, size, 16);
+  ctx.clip();
+
+  // 1. 写真の背景（カフェ・屋外の自然光・温かみのあるボケ風グラデーション）
+  const bgGrad = ctx.createLinearGradient(x, y, x + size, y + size);
+  bgGrad.addColorStop(0, "#fed7aa"); // 温かみのあるアンバー
+  bgGrad.addColorStop(0.5, "#fdba74");
+  bgGrad.addColorStop(1, "#c084fc"); // 優しいパープル
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(x, y, size, size);
+
+  // 背景の柔らかい光のボケ丸
+  ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+  ctx.beginPath();
+  ctx.arc(x + size * 0.2, y + size * 0.25, size * 0.22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x + size * 0.85, y + size * 0.4, size * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+
+  const cx = x + size / 2;
+
+  // 2. 普段着・カジュアルTシャツ（爽やかなミントグリーン）
+  ctx.fillStyle = "#0d9488";
+  ctx.beginPath();
+  ctx.ellipse(cx, y + size * 1.08, size * 0.52, size * 0.38, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tシャツの首元クルーネック
+  ctx.fillStyle = "#0f766e";
+  ctx.beginPath();
+  ctx.arc(cx, y + size * 0.88, size * 0.16, 0, Math.PI);
+  ctx.fill();
+
+  // 3. 首
+  ctx.fillStyle = "#fbcfe8";
+  const neckGrad = ctx.createLinearGradient(cx, y + size * 0.65, cx, y + size * 0.85);
+  neckGrad.addColorStop(0, "#fed7aa");
+  neckGrad.addColorStop(1, "#fcd34d");
+  ctx.fillStyle = neckGrad;
+  ctx.fillRect(cx - size * 0.11, y + size * 0.65, size * 0.22, size * 0.22);
+
+  // 4. 顔の輪郭（優しいオーバル）
+  ctx.fillStyle = "#ffedd5";
+  ctx.beginPath();
+  ctx.ellipse(cx, y + size * 0.52, size * 0.24, size * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ほほのチーク（ほんのりピンク）
+  ctx.fillStyle = "rgba(244, 114, 182, 0.35)";
+  ctx.beginPath();
+  ctx.arc(cx - size * 0.14, y + size * 0.56, size * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + size * 0.14, y + size * 0.56, size * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 5. 目（自然な笑顔）
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = "round";
+
+  // 左目（にっこりアーチ）
+  ctx.beginPath();
+  ctx.arc(cx - size * 0.1, y + size * 0.5, size * 0.05, Math.PI * 1.15, Math.PI * 1.85);
+  ctx.stroke();
+
+  // 右目（にっこりアーチ）
+  ctx.beginPath();
+  ctx.arc(cx + size * 0.1, y + size * 0.5, size * 0.05, Math.PI * 1.15, Math.PI * 1.85);
+  ctx.stroke();
+
+  // 眉毛
+  ctx.strokeStyle = "#475569";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.arc(cx - size * 0.1, y + size * 0.44, size * 0.06, Math.PI * 1.2, Math.PI * 1.8);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx + size * 0.1, y + size * 0.44, size * 0.06, Math.PI * 1.2, Math.PI * 1.8);
+  ctx.stroke();
+
+  // 6. 鼻（小さなシャドウ）
+  ctx.fillStyle = "#fba988";
+  ctx.beginPath();
+  ctx.ellipse(cx, y + size * 0.56, size * 0.025, size * 0.018, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 7. 口（優しい笑顔）
+  ctx.fillStyle = "#f43f5e";
+  ctx.beginPath();
+  ctx.arc(cx, y + size * 0.62, size * 0.06, 0, Math.PI);
+  ctx.fill();
+
+  // 8. 髪型（ナチュラルなミディアムヘア・ブラウン）
+  ctx.fillStyle = "#451a03"; // ダークブラウン
+  // 頭頂部ボリューム
+  ctx.beginPath();
+  ctx.arc(cx, y + size * 0.38, size * 0.28, Math.PI * 0.85, Math.PI * 2.15);
+  ctx.fill();
+
+  // 前髪（自然な分け目）
+  ctx.beginPath();
+  ctx.moveTo(cx - size * 0.24, y + size * 0.42);
+  ctx.quadraticCurveTo(cx - size * 0.05, y + size * 0.36, cx + size * 0.08, y + size * 0.45);
+  ctx.quadraticCurveTo(cx + size * 0.24, y + size * 0.39, cx + size * 0.25, y + size * 0.52);
+  ctx.lineTo(cx + size * 0.26, y + size * 0.32);
+  ctx.lineTo(cx - size * 0.26, y + size * 0.32);
+  ctx.closePath();
+  ctx.fill();
+
+  // サイドの髪の流れ
+  ctx.beginPath();
+  ctx.ellipse(cx - size * 0.23, y + size * 0.52, size * 0.06, size * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + size * 0.23, y + size * 0.52, size * 0.06, size * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 写真の外枠（ホワイト枠線）
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(x, y, size, size, 16);
+  ctx.stroke();
+  ctx.restore();
+}
+
+

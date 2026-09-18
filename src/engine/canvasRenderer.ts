@@ -235,7 +235,8 @@ function renderInlineBoxLabel(
     else if (box.type === "company" || l.includes("会社")) textColor = "#7dd3fc"; // 淡いシアン（会社名）
     else if (box.type === "face" || box.type === "avatar") textColor = "#e9d5ff"; // 淡いパープル（アイコン）
     else if (l.includes("メール")) textColor = "#93c5fd"; // ブルー（メール）
-    else if (l.includes("パスワード")) textColor = "#fca5a5"; // コーラルレッド（パスワード）
+    else if (l.includes("パスワード") || l.includes("pw")) textColor = "#fca5a5"; // コーラルレッド（パスワード）
+    else if (l.includes("カード") || l.includes("card")) textColor = "#fef08a"; // イエロー（カード情報）
     else if (l.includes("電話") || l.includes("tel")) textColor = "#a7f3d0"; // ミント（電話）
     else if (l.includes("住所")) textColor = "#fed7aa"; // オレンジ（住所）
     else if (box.type === "pii") textColor = "#fecdd3"; // 淡いローズ（連絡先）
@@ -257,7 +258,8 @@ function getCompactLabel(type: RedactType, defaultLabel: string): string {
   const clean = (defaultLabel || "").trim();
   if (clean && clean !== "手動指定") {
     if (clean === "メール" || clean.includes("メール")) return "メール";
-    if (clean === "パスワード" || clean.includes("パスワード")) return "PW";
+    if (clean === "パスワード" || clean.includes("パスワード") || clean === "PW") return "PW";
+    if (clean === "カード情報" || clean.includes("カード") || clean.includes("Card")) return "カード";
     if (clean === "電話番号" || clean.includes("電話")) return "TEL";
     if (clean === "住所" || clean.includes("住所")) return "住所";
     if (clean === "会社名" || clean.includes("会社")) return "会社名";

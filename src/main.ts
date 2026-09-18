@@ -2,7 +2,7 @@ import { appState, type AppState } from "./state/appState";
 import { analyzeImageForRedaction, type RedactBox } from "./engine/redactionEngine";
 import { renderRedactedCanvas, findBoxAtPosition, renderLineGuides } from "./engine/canvasRenderer";
 import { calculateLineSnap, type SnapResult } from "./engine/lineSnap";
-import { generateChatSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
+import { generateChatSampleImage, generateDashboardSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
 import { copyCanvasToClipboard, downloadCanvasImage, copyAiPromptToClipboard } from "./utils/exportUtils";
 import { rotateImage90, rotateAndDeskewImage, enhanceImageForOcr } from "./utils/imageEnhance";
 import {
@@ -17,7 +17,7 @@ import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine
 import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
 import { registerSW } from "virtual:pwa-register";
 import { ModelCacheManager } from "./engine/modelCache";
-import { isLlmOptInEnabled, setLlmOptInEnabled, getLocalLlmPipeline } from "./engine/localLlm";
+import { isLlmOptInEnabled, setLlmOptInEnabled, getLocalLlmPipeline, cleanAndRedactTextWithLlm } from "./engine/localLlm";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -71,8 +71,12 @@ const deskewValDisplay = document.getElementById("deskewValDisplay") as HTMLSpan
 // Toolbar Elements
 const toolSelectMode = document.getElementById("toolSelectMode") as HTMLButtonElement;
 const toolDrawMode = document.getElementById("toolDrawMode") as HTMLButtonElement;
-const selectDrawLabel = document.getElementById("selectDrawLabel") as HTMLSelectElement;
 const selectRedactStyle = document.getElementById("selectRedactStyle") as HTMLSelectElement;
+const sampleDropdownMenu = document.getElementById("sampleDropdownMenu") as HTMLDivElement | null;
+const menuSampleChat = document.getElementById("menuSampleChat") as HTMLButtonElement | null;
+const menuSampleDashboard = document.getElementById("menuSampleDashboard") as HTMLButtonElement | null;
+const menuSampleSkewed = document.getElementById("menuSampleSkewed") as HTMLButtonElement | null;
+const btnLoadDashboardSample = document.getElementById("btnLoadDashboardSample") as HTMLButtonElement | null;
 const btnCompare = document.getElementById("btnCompare") as HTMLButtonElement;
 const btnClearAllBoxes = document.getElementById("btnClearAllBoxes") as HTMLButtonElement;
 const btnSideClearAll = document.getElementById("btnSideClearAll") as HTMLButtonElement | null;
@@ -94,15 +98,19 @@ const btnPopoverDelete = document.getElementById("btnPopoverDelete") as HTMLButt
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
 const btnSelectFile = document.getElementById("btnSelectFile") as HTMLButtonElement;
-const btnLoadSample = document.getElementById("btnLoadSample") as HTMLButtonElement;
-const btnLoadSkewedSample = document.getElementById("btnLoadSkewedSample") as HTMLButtonElement;
+const btnLoadSample = document.getElementById("btnLoadSample") as HTMLButtonElement | null;
+const btnLoadSkewedSample = document.getElementById("btnLoadSkewedSample") as HTMLButtonElement | null;
 const btnSampleHeader = document.getElementById("btnSampleHeader") as HTMLButtonElement;
+
+
 const btnNewPhotoHeader = document.getElementById("btnNewPhotoHeader") as HTMLButtonElement;
 
 // Sidebar & Settings
 const btnCopyImage = document.getElementById("btnCopyImage") as HTMLButtonElement;
 const btnDownloadImage = document.getElementById("btnDownloadImage") as HTMLButtonElement;
 const btnCopyRedactedText = document.getElementById("btnCopyRedactedText") as HTMLButtonElement;
+const btnAiCleanRedactText = document.getElementById("btnAiCleanRedactText") as HTMLButtonElement | null;
+const redactedModeBadge = document.getElementById("redactedModeBadge") as HTMLSpanElement | null;
 const txtRedactedPreview = document.getElementById("txtRedactedPreview") as HTMLTextAreaElement;
 const btnCopyPrompt = document.getElementById("btnCopyPrompt") as HTMLButtonElement | null;
 const aiPromptSelect = document.getElementById("aiPromptSelect") as HTMLSelectElement | null;
@@ -410,22 +418,112 @@ async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 let currentPreloadedOcr: import("./engine/ocr").OcrResult | undefined;
 let currentPreloadedAvatars: { x: number; y: number; width: number; height: number }[] | undefined;
 let lastOcrResult: import("./engine/ocr").OcrResult | null = null;
+let aiCleanedText: string | null = null;
+
+function updateRedactedBadge(mode: "rule" | "ai"): void {
+  if (!redactedModeBadge) return;
+  if (!isLlmOptInEnabled()) {
+    redactedModeBadge.textContent = "外部送信安全";
+    redactedModeBadge.style.background = "rgba(16, 185, 129, 0.15)";
+    redactedModeBadge.style.color = "#34d399";
+    redactedModeBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+    return;
+  }
+  if (mode === "ai") {
+    redactedModeBadge.textContent = "🤖 AI文脈清書済み";
+    redactedModeBadge.style.background = "linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.25))";
+    redactedModeBadge.style.color = "#c084fc";
+    redactedModeBadge.style.borderColor = "rgba(168, 85, 247, 0.4)";
+  } else {
+    redactedModeBadge.textContent = "⚡ 高速ルール伏字";
+    redactedModeBadge.style.background = "rgba(59, 130, 246, 0.15)";
+    redactedModeBadge.style.color = "#60a5fa";
+    redactedModeBadge.style.borderColor = "rgba(59, 130, 246, 0.3)";
+  }
+}
+
+/**
+ * LLMオプトイン設定（ON/OFF）に応じて伏字テキストエリアのボタン・説明文・バッジを動的制御
+ */
+function updateRedactedUiByLlmOptIn(): void {
+  const isOptedIn = isLlmOptInEnabled();
+  const redactedDescText = document.getElementById("redactedDescText") as HTMLParagraphElement | null;
+
+  if (isOptedIn) {
+    // LLM有効時：AI清書ボタンを表示し、横並び配置
+    if (btnAiCleanRedactText) {
+      btnAiCleanRedactText.style.display = "inline-flex";
+    }
+    if (btnCopyRedactedText) {
+      btnCopyRedactedText.classList.remove("btn-block");
+      btnCopyRedactedText.style.flex = "1";
+      btnCopyRedactedText.textContent = "📋 テキストをコピー";
+    }
+    if (redactedDescText) {
+      redactedDescText.innerHTML =
+        '個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> 等に伏字化。AIボタンで誤字や文字化けを文脈修復して綺麗に清書できます。';
+    }
+    updateRedactedBadge(aiCleanedText ? "ai" : "rule");
+  } else {
+    // LLM無効時（通常）：AI清書ボタンを非表示にし、コピーボタンを全幅でシンプル表示
+    if (btnAiCleanRedactText) {
+      btnAiCleanRedactText.style.display = "none";
+    }
+    if (btnCopyRedactedText) {
+      btnCopyRedactedText.classList.add("btn-block");
+      btnCopyRedactedText.style.flex = "none";
+      btnCopyRedactedText.textContent = "📋 伏字テキストをコピー";
+    }
+    if (redactedDescText) {
+      redactedDescText.innerHTML =
+        '個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> などに置換。画像より高速・安全にAIへ質問できます。';
+    }
+    if (redactedModeBadge) {
+      redactedModeBadge.textContent = "外部送信安全";
+      redactedModeBadge.style.background = "rgba(16, 185, 129, 0.15)";
+      redactedModeBadge.style.color = "#34d399";
+      redactedModeBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+    }
+  }
+}
+
 
 /**
  * 伏字テキストプレビューの表示更新
+ * @param resetAi 手動編集や再解析等でAI清書テキストを破棄してルール伏字に戻す場合は true
  */
-function refreshRedactedTextPreview(): void {
+function refreshRedactedTextPreview(resetAi = false): void {
   const state = appState.getState();
+
+  if (resetAi) {
+    aiCleanedText = null;
+  }
+
   if (!state.sourceImage || !lastOcrResult || lastOcrResult.lines.length === 0) {
+    aiCleanedText = null;
+    updateRedactedBadge("rule");
     if (txtRedactedPreview) {
       txtRedactedPreview.value = state.sourceImage
         ? "テキスト抽出中、または文字が検出されませんでした。"
         : "解析が完了すると、伏字化されたテキストがここに表示されます。";
     }
     if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
+    if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = true;
     return;
   }
 
+  if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = false;
+
+  // AI清書テキストが既に存在する場合はそれを優先表示
+  if (aiCleanedText) {
+    updateRedactedBadge("ai");
+    if (txtRedactedPreview) txtRedactedPreview.value = aiCleanedText;
+    if (btnCopyRedactedText) btnCopyRedactedText.disabled = false;
+    return;
+  }
+
+  // ルールベース伏字の更新
+  updateRedactedBadge("rule");
   const res = generateRedactedText(lastOcrResult, state.boxes);
   if (txtRedactedPreview) {
     txtRedactedPreview.value = res.redactedText || "(検出された文字はありませんでした)";
@@ -434,6 +532,7 @@ function refreshRedactedTextPreview(): void {
     btnCopyRedactedText.disabled = !res.redactedText;
   }
 }
+
 
 async function canvasToImage(canvas: HTMLCanvasElement): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -574,7 +673,7 @@ async function startAnalysis(): Promise<void> {
 
     lastOcrResult = result.ocrResult;
     appState.setBoxes(result.boxes);
-    refreshRedactedTextPreview();
+    refreshRedactedTextPreview(true);
 
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
     const corrNotice = lastCorrection && !lastCorrection.skipped ? " / 正対化済み" : "";
@@ -772,9 +871,6 @@ function syncUiWithState(state: AppState): void {
   if (selectRedactStyle) {
     selectRedactStyle.value = state.rendererOptions.style;
   }
-  if (selectDrawLabel && state.activeDrawLabel) {
-    selectDrawLabel.value = state.activeDrawLabel;
-  }
 
   if (!state.selectedBoxId) {
     hideBoxEditorPopover();
@@ -789,6 +885,7 @@ function syncUiWithState(state: AppState): void {
   if (btnMobileCopy) btnMobileCopy.disabled = !hasImage;
   if (btnMobileDownload) btnMobileDownload.disabled = !hasImage;
   btnCopyRedactedText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
+  if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
   btnCompare.disabled = !hasImage;
   if (btnClearAllBoxes) btnClearAllBoxes.disabled = !hasImage || state.boxes.length === 0;
   if (btnSideClearAll) btnSideClearAll.disabled = !hasImage || state.boxes.length === 0;
@@ -891,7 +988,7 @@ function syncUiWithState(state: AppState): void {
   });
 
   // 伏字テキストプレビューの同期
-  refreshRedactedTextPreview();
+  refreshRedactedTextPreview(true);
 
   // Canvas再描画
   updateCanvasRender();
@@ -1060,22 +1157,53 @@ function initEvents(): void {
     fileInput.value = "";
   });
 
-  // サンプル画像読み込み
-  const loadSampleAction = () => {
+  // サンプル画像読み込み（チャット）
+  const loadChatSampleAction = () => {
+    if (sampleDropdownMenu) sampleDropdownMenu.style.display = "none";
     showToast("チャット画面のサンプルを読み込んでいます...");
     const sample = generateChatSampleImage();
     handleImageDataUrl(sample.dataUrl, sample.ocrData, sample.avatars);
   };
-  btnLoadSample.addEventListener("click", loadSampleAction);
-  btnSampleHeader.addEventListener("click", loadSampleAction);
+  if (btnLoadSample) btnLoadSample.addEventListener("click", loadChatSampleAction);
+  if (menuSampleChat) menuSampleChat.addEventListener("click", loadChatSampleAction);
+
+
+  // サンプル画像読み込み（プライベートダッシュボード）
+  const loadDashboardSampleAction = () => {
+    if (sampleDropdownMenu) sampleDropdownMenu.style.display = "none";
+    showToast("マイアカウント・ダッシュボード（顔写真・個人情報）を読み込んでいます...");
+    const sample = generateDashboardSampleImage();
+    handleImageDataUrl(sample.dataUrl, sample.ocrData, sample.avatars);
+  };
+  if (btnLoadDashboardSample) btnLoadDashboardSample.addEventListener("click", loadDashboardSampleAction);
+  if (menuSampleDashboard) menuSampleDashboard.addEventListener("click", loadDashboardSampleAction);
 
   // 斜め撮影サンプル読み込み
-  if (btnLoadSkewedSample) {
-    btnLoadSkewedSample.addEventListener("click", () => {
-      showToast("斜め撮影（スマホカメラ風）サンプルを生成中...");
-      const sample = generateSkewedChatSampleImage();
-      // メタデータなしで通常読み込み（OCRと輪郭自動検出がフル稼働）
-      handleImageDataUrl(sample.dataUrl);
+  const loadSkewedSampleAction = () => {
+    if (sampleDropdownMenu) sampleDropdownMenu.style.display = "none";
+    showToast("斜め撮影（スマホカメラ風）サンプルを生成中...");
+    const sample = generateSkewedChatSampleImage();
+    // メタデータなしで通常読み込み（OCRと輪郭自動検出がフル稼働）
+    handleImageDataUrl(sample.dataUrl);
+  };
+  if (btnLoadSkewedSample) btnLoadSkewedSample.addEventListener("click", loadSkewedSampleAction);
+  if (menuSampleSkewed) menuSampleSkewed.addEventListener("click", loadSkewedSampleAction);
+
+  // ヘッダーのサンプルドロップダウン開閉トグル
+  if (btnSampleHeader && sampleDropdownMenu) {
+    btnSampleHeader.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = sampleDropdownMenu.style.display === "flex";
+      sampleDropdownMenu.style.display = isOpen ? "none" : "flex";
+      btnSampleHeader.setAttribute("aria-expanded", String(!isOpen));
+    });
+
+    // 外側クリックでメニューを閉じる
+    document.addEventListener("click", (e) => {
+      if (!sampleDropdownMenu.contains(e.target as Node) && e.target !== btnSampleHeader) {
+        sampleDropdownMenu.style.display = "none";
+        btnSampleHeader.setAttribute("aria-expanded", "false");
+      }
     });
   }
 
@@ -1131,22 +1259,7 @@ function initEvents(): void {
     });
   }
 
-  // 項目ラベル切り替え (ドロップダウン)
-  if (selectDrawLabel) {
-    selectDrawLabel.addEventListener("change", () => {
-      const val = selectDrawLabel.value;
-      appState.setActiveDrawLabel(val);
-      const state = appState.getState();
-      if (state.selectedBoxId) {
-        appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
-        updateCanvasRender();
-        refreshRedactedTextPreview();
-        const box = state.boxes.find((b) => b.id === state.selectedBoxId);
-        if (box) showBoxEditorPopover(box);
-      }
-      showToast(`次に追加する黒塗りの項目: ${val}`);
-    });
-  }
+
 
   // ポップオーバーのチップ選択
   if (boxEditorPopover) {
@@ -1159,9 +1272,8 @@ function initEvents(): void {
 
         appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label})` });
         appState.setActiveDrawLabel(label);
-        if (selectDrawLabel) selectDrawLabel.value = label;
         updateCanvasRender();
-        refreshRedactedTextPreview();
+        refreshRedactedTextPreview(true);
         showToast(`🏷️ ラベルを「${label}」に設定しました`);
 
         chips.forEach((c) => c.classList.toggle("active", c === chip));
@@ -1179,7 +1291,7 @@ function initEvents(): void {
         appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
         appState.setActiveDrawLabel(val);
         updateCanvasRender();
-        refreshRedactedTextPreview();
+        refreshRedactedTextPreview(true);
         showToast(`🏷️ ラベルを「${val}」に設定しました`);
 
         chips.forEach((c) => c.classList.toggle("active", c.getAttribute("data-label") === val));
@@ -1206,7 +1318,7 @@ function initEvents(): void {
           popoverToggleText.textContent = updatedBox.enabled ? "保護を一時解除" : "保護を再適用";
         }
         updateCanvasRender();
-        refreshRedactedTextPreview();
+        refreshRedactedTextPreview(true);
       });
     }
 
@@ -1218,7 +1330,7 @@ function initEvents(): void {
         appState.removeBox(state.selectedBoxId);
         hideBoxEditorPopover();
         updateCanvasRender();
-        refreshRedactedTextPreview();
+        refreshRedactedTextPreview(true);
         showToast("🗑️ 黒塗りを削除しました");
       });
     }
@@ -1249,6 +1361,7 @@ function initEvents(): void {
     const state = appState.getState();
     if (!state.sourceImage || state.boxes.length === 0) return;
     appState.clearAllBoxes();
+    refreshRedactedTextPreview(true);
     showToast("🗑️ すべての黒塗りを解除しました（「✨ 自動検出」で再検出できます）");
   };
   if (btnClearAllBoxes) btnClearAllBoxes.addEventListener("click", clearAllAction);
@@ -1265,8 +1378,14 @@ function initEvents(): void {
     });
   }
 
-  btnUndo.addEventListener("click", () => appState.undo());
-  btnRedo.addEventListener("click", () => appState.redo());
+  btnUndo.addEventListener("click", () => {
+    appState.undo();
+    refreshRedactedTextPreview(true);
+  });
+  btnRedo.addEventListener("click", () => {
+    appState.redo();
+    refreshRedactedTextPreview(true);
+  });
   btnReset.addEventListener("click", () => {
     if (confirm("現在の画像を閉じて新しく始めますか？")) {
       appState.setSourceImage(null);
@@ -1496,13 +1615,24 @@ function initEvents(): void {
   // 端末内AI 判定感度スライダー
   if (sliderAiConfidence && aiConfidenceValDisplay) {
     sliderAiConfidence.addEventListener("input", () => {
-      const val = parseInt(sliderAiConfidence.value, 10);
-      let label = `${val}%`;
-      if (val <= 35) label = `高感度 (${val}%) - 漏れ防止`;
-      else if (val >= 70) label = `厳格 (${val}%) - 確実重視`;
-      else label = `標準 (${val}%)`;
+      const sensitivity = parseInt(sliderAiConfidence.value, 10);
+      let label = `${sensitivity}%`;
+      if (sensitivity >= 65) {
+        label = `高感度 (${sensitivity}%) - 漏れ防止`;
+      } else if (sensitivity <= 35) {
+        label = `低感度 (${sensitivity}%) - 確実重視`;
+      } else {
+        label = `標準 (${sensitivity}%)`;
+      }
       aiConfidenceValDisplay.textContent = label;
-      appState.setFilterOptions({ aiConfidenceThreshold: val / 100 });
+
+      // 感度（高いほど漏れを防ぎしきい値を下げる、低いほど誤検知を防ぎしきい値を上げて厳格化）
+      // 20% -> threshold 0.80 (低感度・確実重視)
+      // 50% -> threshold 0.55 (標準)
+      // 80% -> threshold 0.35 (高感度・漏れ防止)
+      const threshold = 1.0 - (sensitivity / 100 * 0.75);
+      const clamped = Math.max(0.25, Math.min(0.85, threshold));
+      appState.setFilterOptions({ aiConfidenceThreshold: clamped });
     });
 
     sliderAiConfidence.addEventListener("change", () => {
@@ -1581,17 +1711,26 @@ function initEvents(): void {
       showToast("テキスト解析データがありません");
       return;
     }
-    const res = generateRedactedText(lastOcrResult, state.boxes);
-    if (!res.redactedText || res.redactedText.trim().length === 0) {
+
+    // AI清書テキストがあればそれを優先、なければルールベース生成
+    let targetText = aiCleanedText;
+    if (!targetText) {
+      const res = generateRedactedText(lastOcrResult, state.boxes);
+      targetText = res.redactedText;
+    }
+
+    if (!targetText || targetText.trim().length === 0) {
       showToast("コピー可能なテキストが見つかりませんでした");
       return;
     }
 
     const promptType = aiPromptSelect?.value || "summary";
-    let fullText = res.redactedText;
+    let fullText = targetText;
     if (promptType !== "none") {
-      fullText = buildAiPromptWithRedactedText(res.redactedText, promptType);
+      fullText = buildAiPromptWithRedactedText(targetText, promptType);
     }
+
+    const isAiMode = !!aiCleanedText;
 
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1600,9 +1739,9 @@ function initEvents(): void {
         throw new Error("clipboard API unsupported");
       }
       if (promptType !== "none") {
-        showToast("伏字テキスト＋AI指示文をコピーしました", 3500);
+        showToast(isAiMode ? "🤖 AI清書伏字テキスト＋AI指示文をコピーしました" : "伏字テキスト＋AI指示文をコピーしました", 3500);
       } else {
-        showToast("伏字テキストをコピーしました", 3500);
+        showToast(isAiMode ? "🤖 AI清書伏字テキストをコピーしました" : "伏字テキストをコピーしました", 3500);
       }
     } catch {
       // フォールバック
@@ -1611,12 +1750,84 @@ function initEvents(): void {
         txtRedactedPreview.focus();
         txtRedactedPreview.select();
         document.execCommand("copy");
-        showToast("伏字テキストをコピーしました", 3500);
+        showToast(isAiMode ? "🤖 AI清書伏字テキストをコピーしました" : "伏字テキストをコピーしました", 3500);
       } else {
         showToast("クリップボードへのコピーに失敗しました");
       }
     }
   });
+
+  // 🤖 AIで文章清書・高精度伏字化ボタン
+  if (btnAiCleanRedactText) {
+    btnAiCleanRedactText.addEventListener("click", async () => {
+      const state = appState.getState();
+      if (!state.sourceImage || !lastOcrResult || lastOcrResult.lines.length === 0) {
+        showToast("清書対象のテキストデータがありません");
+        return;
+      }
+
+      // 現在のルールベース伏字テキスト、またはOCR生テキストを取得
+      const res = generateRedactedText(lastOcrResult, state.boxes);
+      const textToClean = res.redactedText || lastOcrResult.lines.map((l) => l.text).join("\n");
+      if (!textToClean || textToClean.trim().length === 0) {
+        showToast("清書対象のテキストが空です");
+        return;
+      }
+
+      // LLMオプトイン確認
+      if (!isLlmOptInEnabled()) {
+        const agreed = confirm(
+          "【🤖 AI文章清書機能】\n\n" +
+          "文字化けや誤字を文脈から補正し、自然で綺麗な日本語で個人情報を伏字化します。\n\n" +
+          "※ ブラウザ内の極小AIモデル（Qwen2.5-0.5B、約350MB）を端末にダウンロードして実行します。\n" +
+          "※ 画像やテキストが外部サーバーへ送信されることは一切ありません（完全ローカル実行）。\n\n" +
+          "ダウンロードして実行しますか？"
+        );
+        if (!agreed) return;
+        setLlmOptInEnabled(true);
+        const toggleLlmOptInEl = document.getElementById("toggleLlmOptIn") as HTMLInputElement | null;
+        if (toggleLlmOptInEl) {
+          toggleLlmOptInEl.checked = true;
+        }
+      }
+
+
+
+      const originalBtnText = btnAiCleanRedactText.innerHTML;
+      btnAiCleanRedactText.disabled = true;
+      btnAiCleanRedactText.innerHTML = `清書中...`;
+
+      showToast("🤖 文脈AIが文章を清書・高精度伏字化しています...", 5000);
+
+      try {
+        const cleaned = await cleanAndRedactTextWithLlm(textToClean, (status) => {
+          showToast(`🤖 ${status}`, 3000);
+        });
+
+        if (cleaned && cleaned.trim().length > 0) {
+          aiCleanedText = cleaned;
+          if (txtRedactedPreview) {
+            txtRedactedPreview.value = cleaned;
+          }
+          updateRedactedBadge("ai");
+          if (btnCopyRedactedText) btnCopyRedactedText.disabled = false;
+          // プレビューを開いて見せる
+          const details = document.getElementById("detailsRedactedText") as HTMLDetailsElement | null;
+          if (details) details.open = true;
+          showToast("✨ AIによる文章清書・高精度伏字化が完了しました！", 4000);
+        } else {
+          showToast("AI清書結果が空でした。通常の伏字テキストを表示します");
+        }
+      } catch (err) {
+        console.error("[AiClean] Error during cleanAndRedactTextWithLlm:", err);
+        showToast("⚠️ AI文章清書中にエラーが発生しました。通常伏字テキストをご利用ください", 4000);
+      } finally {
+        btnAiCleanRedactText.disabled = false;
+        btnAiCleanRedactText.innerHTML = originalBtnText;
+      }
+    });
+  }
+
 
   if (aiPromptSelect) {
     const savedPrompt = localStorage.getItem("kuronuri_prompt_template");
@@ -1924,6 +2135,7 @@ function initEvents(): void {
     currentSnapResult = null;
     activeSnappedLine = null;
     updateCanvasRender();
+    refreshRedactedTextPreview(true);
   });
 
   // タッチ操作（スマホ対応：ピンチズーム・パン・行スナップ描画）
@@ -2129,6 +2341,7 @@ function initEvents(): void {
     currentSnapResult = null;
     activeSnappedLine = null;
     updateCanvasRender();
+    refreshRedactedTextPreview(true);
   });
 
   // モバイル専用スライドアップメニューとクイック操作の初期化
@@ -2388,6 +2601,7 @@ function initPwaAndStorageManager(): void {
       setLlmOptInEnabled(false);
       if (toggleLlm) toggleLlm.checked = false;
       updateToggleUi(false);
+      updateRedactedUiByLlmOptIn();
       showToast("🗑️ 文脈AIデータを削除し、端末容量を解放しました");
       await updateStorageStats();
     }
@@ -2401,6 +2615,7 @@ function initPwaAndStorageManager(): void {
       const enabled = toggleLlm.checked;
       setLlmOptInEnabled(enabled);
       updateToggleUi(enabled);
+      updateRedactedUiByLlmOptIn();
 
       if (enabled) {
         if (llmProgressContainer) llmProgressContainer.style.display = "block";
@@ -2421,6 +2636,7 @@ function initPwaAndStorageManager(): void {
           setLlmOptInEnabled(false);
           if (toggleLlm) toggleLlm.checked = false;
           updateToggleUi(false);
+          updateRedactedUiByLlmOptIn();
           showToast("⚠️ お使いの端末環境では文脈AIの初期化が完了できませんでした。通常モード（高精度NER＋ルールベース）で保護します");
           await updateStorageStats();
         } finally {
@@ -2442,6 +2658,7 @@ function initPwaAndStorageManager(): void {
       }
     });
   }
+
 
   const openModal = () => {
     if (modal) modal.style.display = "flex";
@@ -2469,4 +2686,5 @@ function initPwaAndStorageManager(): void {
 // 初期化実行
 initEvents();
 initPwaAndStorageManager();
+updateRedactedUiByLlmOptIn();
 

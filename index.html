@@ -51,9 +51,34 @@
           </svg>
           <span class="btn-text">AI機能設定</span>
         </button>
-        <button id="btnSampleHeader" class="btn btn-secondary btn-sm" title="チャット画面のサンプルで動作をテスト">
-          <span class="btn-text">サンプル</span>
-        </button>
+        <div class="sample-menu-wrapper">
+          <button id="btnSampleHeader" class="btn btn-secondary btn-sm" title="テスト用サンプル画像を選択" aria-haspopup="true" aria-expanded="false">
+            <span class="btn-text">サンプル ▾</span>
+          </button>
+          <div id="sampleDropdownMenu" class="sample-dropdown-menu" style="display: none;" role="menu">
+            <button class="sample-dropdown-item" id="menuSampleChat" role="menuitem">
+              <span class="sample-item-icon">📱</span>
+              <div class="sample-item-info">
+                <div class="sample-item-title">チャット画面（業務連絡）</div>
+                <div class="sample-item-desc">名前・メール・電話・住所を含むメッセージ</div>
+              </div>
+            </button>
+            <button class="sample-dropdown-item" id="menuSampleDashboard" role="menuitem">
+              <span class="sample-item-icon">👤</span>
+              <div class="sample-item-info">
+                <div class="sample-item-title">会員ダッシュボード（顔写真・個人情報）</div>
+                <div class="sample-item-desc">プライベート顔写真・メール・住所・パスワード等</div>
+              </div>
+            </button>
+            <button class="sample-dropdown-item" id="menuSampleSkewed" role="menuitem">
+              <span class="sample-item-icon">📐</span>
+              <div class="sample-item-info">
+                <div class="sample-item-title">斜め撮影スマホ（歪み補正テスト）</div>
+                <div class="sample-item-desc">机の上のスマホ写真を4隅調整・正対化</div>
+              </div>
+            </button>
+          </div>
+        </div>
         <button id="btnNewPhotoHeader" class="btn btn-camera btn-sm">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -91,20 +116,6 @@
             </button>
           </div>
 
-          <!-- Redaction Item Label -->
-          <div class="tool-group tool-select-group" title="次に追加する黒塗りの種類">
-            <span class="tool-select-icon">🏷️</span>
-            <select id="selectDrawLabel" class="tool-select" title="黒塗りに付けるラベル（メール、人名、パスワード等）">
-              <option value="メール" selected>✉️ メール</option>
-              <option value="人名">👤 人名</option>
-              <option value="電話番号">📞 電話番号</option>
-              <option value="パスワード">🔑 パスワード</option>
-              <option value="住所">🏠 住所</option>
-              <option value="会社名">🏢 会社名</option>
-              <option value="金額">💴 金額</option>
-              <option value="手動">✍️ 手動</option>
-            </select>
-          </div>
 
           <!-- Redaction Style (Consolidated Dropdown) -->
           <div class="tool-group tool-select-group" title="黒塗りの表現スタイル">
@@ -184,15 +195,10 @@
                 </svg>
                 写真を選択
               </button>
-              <button id="btnLoadSample" class="btn btn-primary">
-                📱 チャットサンプルで試す
-              </button>
-              <button id="btnLoadSkewedSample" class="btn btn-secondary" title="斜め撮影されたスマホ画面の補正や斜め黒塗りをテスト">
-                📐 斜め撮影サンプルで試す
-              </button>
             </div>
-            <div style="margin-top: 1.25rem; font-size: 0.78rem; color: var(--text-dim);">
-              ※ Ctrl+V（貼り付け）でも即座に画像を読み込めます
+            <div style="margin-top: 1.25rem; font-size: 0.78rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 0.35rem; align-items: center;">
+              <span>※ Ctrl+V（貼り付け）でも即座に画像を読み込めます</span>
+              <span style="font-size: 0.74rem; color: var(--text-muted);">動作テスト用画像は右上の<b>「サンプル ▾」</b>から読み込めます</span>
             </div>
           </div>
 
@@ -345,19 +351,24 @@
           <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.75rem;">
             <div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
               <span>AI相談用テキスト (伏字化)</span>
-              <span style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 2px 6px; border-radius: 4px;">外部送信安全</span>
+              <span id="redactedModeBadge" style="font-size: 0.68rem; background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 500;">外部送信安全</span>
             </div>
-            <p style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.35;">
-              個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[会社名]</code> などに置換。画像より高速・安全にAIへ質問できます。
+            <p id="redactedDescText" style="font-size: 0.73rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.35;">
+              個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> などに置換。画像より高速・安全にAIへ質問できます。
             </p>
-            <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="margin-bottom: 0.5rem; border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600;">
-              伏字テキストをコピー
-            </button>
-            <details id="detailsRedactedText" style="font-size: 0.75rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.35rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.06);">
-              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 500; user-select: none;">
+            <div id="redactedActionGroup" style="display: flex; gap: 0.4rem; margin-bottom: 0.55rem;">
+              <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600; font-size: 0.76rem; padding: 0.42rem 0.4rem;">
+                📋 伏字テキストをコピー
+              </button>
+              <button id="btnAiCleanRedactText" class="btn btn-primary" style="display: none; flex: 1.15; font-size: 0.76rem; padding: 0.42rem 0.4rem; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border: none; font-weight: 600; box-shadow: 0 2px 6px rgba(139, 92, 246, 0.25);" title="文字化けや誤字を文脈から補正し、自然な日本語文章に清書・伏字化します">
+                🤖 AIで文章清書
+              </button>
+            </div>
+            <details id="detailsRedactedText" open style="font-size: 0.75rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.35rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.06);">
+              <summary style="cursor: pointer; color: var(--text-muted); font-weight: 500; user-select: none; margin-bottom: 0.2rem;">
                 伏字テキストをプレビュー
               </summary>
-              <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 90px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.72rem; padding: 0.4rem; resize: vertical; box-sizing: border-box;" placeholder="解析が完了すると、伏字化されたテキストがここに表示されます"></textarea>
+              <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 110px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.72rem; padding: 0.4rem; resize: vertical; box-sizing: border-box;" placeholder="解析が完了すると、伏字化されたテキストがここに表示されます"></textarea>
             </details>
           </div>
         </div>
@@ -652,10 +663,10 @@
               <span id="aiConfidenceValDisplay" style="font-size: 0.8rem; font-weight: 600; color: #38bdf8;">標準 (50%)</span>
             </div>
             <p style="font-size: 0.74rem; color: var(--text-dim); margin-bottom: 0.6rem; line-height: 1.4;">
-              左（30%）に寄せると文脈から疑わしい箇所を余さず拾い、右（85%）に寄せると確実な人名・組織のみに絞り込みます。
+              右（高感度）に寄せると文脈から疑わしい箇所を余さず拾い、左（低感度）に寄せると確実な個人情報のみに絞り込みます。
             </p>
             <div class="range-container">
-              <input type="range" id="sliderAiConfidence" class="range-input" min="30" max="85" value="50" step="5">
+              <input type="range" id="sliderAiConfidence" class="range-input" min="20" max="80" value="50" step="5">
             </div>
           </div>
 

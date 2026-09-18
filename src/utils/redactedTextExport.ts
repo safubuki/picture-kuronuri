@@ -29,7 +29,8 @@ function getPlaceholder(box: RedactBox): string {
     if (l === "住所" || l.includes("住所")) return "[住所]";
     if (l === "人名" || l.includes("人名")) return "[人名]";
     if (l === "会社名" || l.includes("会社")) return "[会社名]";
-    if (l === "パスワード" || l.includes("パスワード")) return "[パスワード]";
+    if (l === "パスワード" || l.includes("パスワード") || l === "PW") return "[パスワード]";
+    if (l === "カード" || l.includes("カード")) return "[カード情報]";
     if (l === "金額" || l.includes("金額")) return "[金額]";
     return `[${l}]`;
   }
@@ -43,12 +44,29 @@ function getPlaceholder(box: RedactBox): string {
       if (box.label.includes("電話")) return "[電話番号]";
       if (box.label.includes("メール")) return "[メールアドレス]";
       if (box.label.includes("住所")) return "[住所]";
+      if (box.label.includes("パスワード") || box.label.includes("PW")) return "[パスワード]";
+      if (box.label.includes("カード")) return "[カード情報]";
+      if (box.label.includes("金額")) return "[金額]";
       return `[${box.label}]`;
     case "custom":
       return `[伏字: ${box.text || "非公開"}]`;
     default:
       return "[非公開]";
   }
+}
+
+/**
+ * 日本語テキスト内の不自然なOCR空白を整流化
+ */
+function cleanOcrWhitespace(text: string): string {
+  if (!text) return "";
+  // CJK文字間のスペースを除去 (例: "佐 々 木" -> "佐々木")
+  let s = text.replace(/([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu, "$1$2");
+  // コロン前後の余計なスペースを調整
+  s = s.replace(/\s*([:：])\s*/g, "$1 ");
+  // 連続する半角・全角スペースを1つに縮約
+  s = s.replace(/[ \t\u3000]{2,}/g, " ");
+  return s.trim();
 }
 
 /**
@@ -119,13 +137,11 @@ export function generateRedactedText(
     for (const box of lineBoxes) {
       const placeholder = getPlaceholder(box);
 
-      // A. テキストが明示されているボックスは文字列マッチを優先
-      let matchedByText = false;
+      // A. テキストが明示されているボックスは文字列マッチを判定
       if (box.text && box.text.trim().length > 0) {
         const target = box.text.trim().replace(/[\s\u3000]/g, "");
         const cleanLine = originalText.replace(/[\s\u3000]/g, "");
         if (target.length >= 2 && cleanLine.includes(target)) {
-          // 元テキスト上の出現位置を特定
           let searchIdx = 0;
           while (searchIdx < originalText.length) {
             const found = originalText.indexOf(box.text.trim(), searchIdx);
@@ -136,36 +152,34 @@ export function generateRedactedText(
                 coverage[c] = { covered: true, placeholder, boxId: box.id, type: box.type };
               }
             }
-            matchedByText = true;
             searchIdx = endIdx;
           }
         }
       }
 
-      // B. テキストで完全一致しなかった場合、または手動黒塗りは文字座標との幾何交差判定
-      if (!matchedByText) {
-        const bx0 = box.rect.x;
-        const bx1 = box.rect.x + box.rect.width;
-        const by0 = box.rect.y;
-        const by1 = box.rect.y + box.rect.height;
+      // B. ボックスの物理座標（矩形）と交差する文字も幾何交差判定で確実にカバー
+      // （※ボックスがテキストより広く描かれている場合や手動黒塗りも確実に伏字化）
+      const bx0 = box.rect.x;
+      const bx1 = box.rect.x + box.rect.width;
+      const by0 = box.rect.y;
+      const by1 = box.rect.y + box.rect.height;
 
-        for (let i = 0; i < nChars; i++) {
-          const cb = charBBoxes[i];
-          const cxMid = (cb.x0 + cb.x1) / 2;
-          const cyMid = (cb.y0 + cb.y1) / 2;
+      for (let i = 0; i < nChars; i++) {
+        const cb = charBBoxes[i];
+        const cxMid = (cb.x0 + cb.x1) / 2;
+        const cyMid = (cb.y0 + cb.y1) / 2;
 
-          // 文字の中心がボックス内にある、または横方向のオーバーラップが50%以上
-          const xOverlap = Math.max(0, Math.min(bx1, cb.x1) - Math.max(bx0, cb.x0));
-          const charWidth = Math.max(1, cb.x1 - cb.x0);
-          const isCoveredX = (cxMid >= bx0 && cxMid <= bx1) || (xOverlap / charWidth >= 0.45);
-          const isCoveredY = (cyMid >= by0 && cyMid <= by1) || (by1 >= cb.y0 && by0 <= cb.y1);
+        const xOverlap = Math.max(0, Math.min(bx1, cb.x1) - Math.max(bx0, cb.x0));
+        const charWidth = Math.max(1, cb.x1 - cb.x0);
+        const isCoveredX = (cxMid >= bx0 && cxMid <= bx1) || (xOverlap / charWidth >= 0.35);
+        const isCoveredY = (cyMid >= by0 && cyMid <= by1) || (by1 >= cb.y0 && by0 <= cb.y1);
 
-          if (isCoveredX && isCoveredY) {
-            coverage[i] = { covered: true, placeholder, boxId: box.id, type: box.type };
-          }
+        if (isCoveredX && isCoveredY) {
+          coverage[i] = { covered: true, placeholder, boxId: box.id, type: box.type };
         }
       }
     }
+
 
     // 連続する伏字区間をスパン置換して行テキストを再構築
     let lineResult = "";
@@ -189,11 +203,26 @@ export function generateRedactedText(
         while (i < nChars && coverage[i] && (coverage[i]?.boxId === currentBoxId || coverage[i]?.placeholder === currentPlaceholder)) {
           i++;
         }
-        lineResult += currentPlaceholder;
+
+        // 重複防止：直前の出力が既に同じプレースホルダーで終わっている場合は追加しない（例: [住所] [住所] -> [住所]）
+        const trimmed = lineResult.trimEnd();
+        if (trimmed.endsWith(currentPlaceholder)) {
+          // 重複なのでスキップ
+        } else {
+          // 直前が文字で終わっていれば適切なスペースを挟む
+          if (lineResult.length > 0 && !lineResult.endsWith(" ") && !lineResult.endsWith("　") && !lineResult.endsWith(":") && !lineResult.endsWith("：")) {
+            lineResult += " ";
+          }
+          lineResult += currentPlaceholder;
+        }
       }
     }
 
-    processedLines.push(lineResult);
+    // 各行の余計な空白をクレンジング
+    const cleanedLine = cleanOcrWhitespace(lineResult);
+    if (cleanedLine.length > 0) {
+      processedLines.push(cleanedLine);
+    }
   }
 
   // 連続する空行を整理
@@ -202,7 +231,7 @@ export function generateRedactedText(
     .filter((l, idx, arr) => !(l === "" && arr[idx - 1] === ""));
 
   const redactedText = cleanLines.join("\n");
-  const rawText = ocrResult.lines.map((l) => l.text).join("\n");
+  const rawText = ocrResult.lines.map((l) => cleanOcrWhitespace(l.text)).join("\n");
 
   return {
     redactedText,

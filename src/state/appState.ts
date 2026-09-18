@@ -39,7 +39,7 @@ export const initialState: AppState = {
   panX: 0,
   panY: 0,
   lineSnapEnabled: true,
-  activeDrawLabel: "メール",
+  activeDrawLabel: "手動",
   selectedBoxId: null
 };
 
@@ -137,7 +137,7 @@ export class StateManager {
     // 最小サイズチェック
     if (rect.width < 5 || rect.height < 5) return;
 
-    const label = this.state.activeDrawLabel || "メール";
+    const label = this.state.activeDrawLabel || "手動";
     const newBox: RedactBox = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: "manual",
