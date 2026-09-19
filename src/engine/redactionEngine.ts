@@ -3,9 +3,9 @@ import { runOcr, type OcrResult, type OcrLine, type OcrProgress } from "./ocr";
 import { detectCompaniesInText } from "./rules/companyRules";
 import { detectPersonsInText, isLikelyChatSender } from "./rules/honorifics";
 import { detectPiiInText } from "./rules/piiPatterns";
+import { detectLayoutPii } from "./rules/layoutRules";
+import { mapNormRangeToOriginal, normalizeOcrText } from "./ocrNormalize";
 import { snapBoxesToInk } from "./inkSnap";
-import { extractEntitiesWithLocalAi } from "./localAiNer";
-import { isLlmOptInEnabled, extractConfidentialKeywordsWithLlm } from "./localLlm";
 
 export type RedactType =
   | "face"
@@ -42,7 +42,6 @@ export interface RedactionFilterOptions {
   detectPii: boolean;
   customKeywords: string[];
   padding: number; // 安全マージン (px)
-  aiConfidenceThreshold?: number; // AI判定感度しきい値 (0.3〜0.85, デフォルト: 0.5)
 }
 
 export const DEFAULT_FILTER_OPTIONS: RedactionFilterOptions = {
@@ -52,8 +51,7 @@ export const DEFAULT_FILTER_OPTIONS: RedactionFilterOptions = {
   detectCompanies: true,
   detectPii: true,
   customKeywords: [],
-  padding: 2,
-  aiConfidenceThreshold: 0.5
+  padding: 2
 };
 
 /**
@@ -103,7 +101,14 @@ export async function analyzeImageForRedaction(
       ocrResult = await runOcr(imageElement, onProgress);
     } catch (err) {
       console.warn("OCR failed or offline fallback:", err);
-      ocrResult = { fullText: "", lines: [], symbols: [], scale: 1 };
+      ocrResult = {
+        fullText: "",
+        lines: [],
+        symbols: [],
+        scale: 1,
+        status: "failed",
+        warnings: ["OCRの初期化または文字認識に失敗しました。自動検出結果を確認できません。"]
+      };
     }
   }
 
@@ -112,89 +117,8 @@ export async function analyzeImageForRedaction(
     (ocrResult.analysis?.estimatedLineHeight || 99) > 0 &&
     (ocrResult.analysis?.estimatedLineHeight || 99) < 18;
 
-  // 3. 端末内完全ローカルAI（Transformers.js NER）による文脈理解エンティティ抽出
-  const fullText = ocrResult.lines.map(l => l.text).join("\n");
-  const linesText = ocrResult.lines.map(l => l.text);
-  if (fullText.trim().length > 0) {
-    try {
-      const aiEntities = await extractEntitiesWithLocalAi(
-        fullText,
-        (status, p) => {
-          onProgress?.({ status, progress: 0.85 + p * 0.08 });
-        },
-        options.aiConfidenceThreshold ?? 0.5,
-        linesText
-      );
-
-      for (const entity of aiEntities) {
-        if (entity.type === "person" && !options.detectPersons) continue;
-        if (entity.type === "company" && !options.detectCompanies) continue;
-        if (entity.type === "location" && !options.detectPii) continue;
-
-        // 各行をスキャンしてファジーマッピングでエンティティの文字座標を特定
-        for (const line of ocrResult.lines) {
-          const matches = findEntityInLineWithFuzzy(line.text, entity.text);
-          for (const m of matches) {
-            const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
-            if (rect) {
-              const label = entity.type === "person" ? "人名 (AI)" : entity.type === "company" ? "会社名 (AI)" : "住所 (AI)";
-              boxes.push({
-                id: `ai-${entity.type}-${line.bbox.x0}-${m.startIndex}`,
-                type: entity.type === "location" ? "pii" : entity.type,
-                label,
-                text: m.matchedText,
-                reason: `端末内AI文脈認識 (${Math.round(entity.score * 100)}%)`,
-                rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-                enabled: true,
-                confidence: entity.score
-              });
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[redactionEngine] Local AI NER skipped:", err);
-    }
-  }
-
-  // 3.5 端末内オプトイン極小LLMによる文脈機密キーワード抽出
-  if (isLlmOptInEnabled() && fullText.trim().length > 0) {
-    try {
-      const llmKeywords = await extractConfidentialKeywordsWithLlm(fullText, (status) => {
-        onProgress?.({ status, progress: 0.93 });
-      });
-      if (Array.isArray(llmKeywords)) {
-        for (const rawKw of llmKeywords) {
-          if (typeof rawKw !== "string") continue;
-          const kw = rawKw.trim();
-          if (kw.length < 2) continue;
-
-          for (const line of ocrResult.lines) {
-            const matches = findEntityInLineWithFuzzy(line.text, kw);
-            for (const m of matches) {
-              const rect = calculateBBoxForRange(line, m.startIndex, m.endIndex);
-              if (rect) {
-                boxes.push({
-                  id: `llm-confidential-${line.bbox.x0}-${m.startIndex}`,
-                  type: "pii",
-                  label: "機密・文脈 (LLM)",
-                  text: m.matchedText,
-                  reason: "端末内極小LLM文脈判定",
-                  rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-                  enabled: true,
-                  confidence: 0.9
-                });
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[redactionEngine] Local LLM extraction skipped:", err);
-    }
-  }
-
-  onProgress?.({ status: "個人情報解析・統合中...", progress: 0.94 });
+  // 3. 個人情報の判定は、決定論的な辞書・形式・配置ルールだけで行う。
+  onProgress?.({ status: "個人情報をルール解析中...", progress: 0.89 });
 
   // 4. OCRテキストに対するルールベース解析（相補的ハイブリッド）
   for (const line of ocrResult.lines) {
@@ -213,7 +137,8 @@ export async function analyzeImageForRedaction(
           text: lineText.trim(),
           reason: "チャット送信者名の推定",
           rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-          enabled: true
+          enabled: true,
+          confidence: line.confidence / 100
         });
       }
     }
@@ -237,7 +162,8 @@ export async function analyzeImageForRedaction(
             text: p.matchedText,
             reason: getPersonReasonText(p.reason),
             rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-            enabled: true
+            enabled: true,
+            confidence: line.confidence / 100
           });
         }
       }
@@ -256,7 +182,8 @@ export async function analyzeImageForRedaction(
             text: c.matchedText,
             reason: "法人格または企業名パターン",
             rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-            enabled: true
+            enabled: true,
+            confidence: line.confidence / 100
           });
         }
       }
@@ -276,7 +203,8 @@ export async function analyzeImageForRedaction(
             text: p.matchedText,
             reason: `特定個人情報 (${p.label})`,
             rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-            enabled: true
+            enabled: true,
+            confidence: line.confidence / 100
           });
         }
       }
@@ -284,12 +212,27 @@ export async function analyzeImageForRedaction(
 
     // E. ユーザー指定のカスタムキーワード判定
     if (options.customKeywords && options.customKeywords.length > 0) {
+      const normalizedLine = normalizeOcrText(lineText);
+      const lineSearchText = normalizedLine.text
+        .replace(/[ー−–—‐]/g, "-")
+        .toLocaleLowerCase();
       for (const keyword of options.customKeywords) {
         const kw = keyword.trim();
         if (!kw) continue;
-        let startIndex = 0;
-        while ((startIndex = lineText.indexOf(kw, startIndex)) !== -1) {
-          const endIndex = startIndex + kw.length;
+        const normalizedKeyword = normalizeOcrText(kw).text
+          .replace(/[ー−–—‐]/g, "-")
+          .toLocaleLowerCase();
+        if (!normalizedKeyword) continue;
+        let normalizedStart = 0;
+        while ((normalizedStart = lineSearchText.indexOf(normalizedKeyword, normalizedStart)) !== -1) {
+          const normalizedEnd = normalizedStart + normalizedKeyword.length;
+          const originalRange = mapNormRangeToOriginal(
+            normalizedLine.indexMap,
+            normalizedStart,
+            normalizedEnd
+          );
+          const startIndex = originalRange.start;
+          const endIndex = originalRange.end;
           const rect = calculateBBoxForRange(line, startIndex, endIndex);
           if (rect) {
             boxes.push({
@@ -299,16 +242,37 @@ export async function analyzeImageForRedaction(
               text: kw,
               reason: `指定キーワード: "${kw}"`,
               rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-              enabled: true
+              enabled: true,
+              confidence: line.confidence / 100
             });
           }
-          startIndex = endIndex;
+          normalizedStart = normalizedEnd;
         }
       }
     }
   }
 
-  // 5. AI・ルール協調による「文書内エンティティ全域自動伝播 (Intra-Document Propagation)」
+  // 4.5 帳票で項目ラベルと値が別のOCR行・列に分かれた場合を座標関係から補完する。
+  if (options.detectPii || options.detectPersons) {
+    for (const p of detectLayoutPii(ocrResult.lines)) {
+      if (p.category === "person" && !options.detectPersons) continue;
+      if (p.category !== "person" && !options.detectPii) continue;
+      const rect = calculateBBoxForRange(p.line, p.startIndex, p.endIndex);
+      if (!rect) continue;
+      boxes.push({
+        id: `layout-${p.category}-${p.line.bbox.x0}-${p.line.bbox.y0}-${p.startIndex}`,
+        type: p.category === "person" ? "person" : "pii",
+        label: p.label,
+        text: p.matchedText,
+        reason: `項目ラベルと値の配置 (${p.label})`,
+        rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
+        enabled: true,
+        confidence: Math.max(0, Math.min(0.98, p.line.confidence / 100))
+      });
+    }
+  }
+
+  // 5. ルールで同定済みの名称を文書内の全出現箇所へ伝播する。
   // 1箇所でも特定された人名・会社名は、ドキュメント内の全出現箇所で100%確実に保護
   const detectedPersonNames = new Set<string>();
   const detectedCompanyNames = new Set<string>();
@@ -337,11 +301,12 @@ export async function analyzeImageForRedaction(
             boxes.push({
               id: `person-prop-${line.bbox.x0}-${m.startIndex}`,
               type: "person",
-              label: "人名 (AI連動)",
+              label: "人名 (文書内一致)",
               text: m.matchedText,
               reason: `同定済み人物名の全域保護 (${name})`,
               rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-              enabled: true
+              enabled: true,
+              confidence: line.confidence / 100
             });
           }
         }
@@ -359,11 +324,12 @@ export async function analyzeImageForRedaction(
             boxes.push({
               id: `corp-prop-${line.bbox.x0}-${m.startIndex}`,
               type: "company",
-              label: "会社名 (AI連動)",
+              label: "会社名 (文書内一致)",
               text: m.matchedText,
               reason: `同定済み組織名の全域保護 (${corp})`,
               rect: applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText),
-              enabled: true
+              enabled: true,
+              confidence: line.confidence / 100
             });
           }
         }
@@ -387,7 +353,7 @@ export async function analyzeImageForRedaction(
   if (!isSampleOrPreloaded) {
     onProgress?.({ status: "黒塗り位置を文字に合わせて調整中...", progress: 0.94 });
     try {
-      snapBoxesToInk(imageElement, boxes);
+      snapBoxesToInk(imageElement, boxes, options.padding, isScreenPhoto || smallText);
     } catch (err) {
       console.warn("Ink snap failed:", err);
     }
@@ -453,17 +419,21 @@ function findEntityInLineWithFuzzy(lineText: string, entityText: string): FuzzyM
   const results: FuzzyMatchResult[] = [];
   if (!lineText || typeof lineText !== "string" || !entityText || typeof entityText !== "string") return results;
 
-  const cleanEntity = entityText.replace(/[\s\t\r\n\u3000]/g, "");
+  const cleanEntity = normalizeOcrText(entityText).text
+    .replace(/[\s\t\r\n\u3000]/g, "")
+    .replace(/[ー−–—‐]/g, "-")
+    .toLocaleLowerCase();
   if (cleanEntity.length === 0) return results;
 
-  // lineText の各文字について、空白を除いた文字インデックスマップを作成
+  // 全角半角・大小文字・ハイフン表記を正規化しつつ、元文字位置へのマップを保持する。
+  const normalizedLine = normalizeOcrText(lineText);
   const mapping: number[] = [];
   let cleanLine = "";
-  for (let i = 0; i < lineText.length; i++) {
-    const ch = lineText[i];
+  for (let i = 0; i < normalizedLine.text.length; i++) {
+    const ch = normalizedLine.text[i];
     if (!/[\s\t\r\n\u3000]/.test(ch)) {
-      mapping.push(i);
-      cleanLine += ch;
+      mapping.push(normalizedLine.indexMap[i] ?? i);
+      cleanLine += ch.replace(/[ー−–—‐]/g, "-").toLocaleLowerCase();
     }
   }
 
@@ -512,7 +482,7 @@ function findEntityInLineWithFuzzy(lineText: string, entityText: string): FuzzyM
   return results;
 }
 
-function calculateBBoxForRange(
+export function calculateBBoxForRange(
   line: OcrLine,
   startIndex: number,
   endIndex: number
@@ -520,7 +490,14 @@ function calculateBBoxForRange(
   const textLen = line.text.length;
   if (startIndex < 0 || endIndex > textLen || startIndex >= endIndex) return null;
 
-  // 1. ターゲットテキストの直接シンボル照合（文字一致でピンポイント特定）
+  // 1. text と1:1で揃っているシンボルは文字インデックスを直接使う。
+  // 同じ文字列が同一行に複数存在しても、先頭側へ誤配置しない。
+  if (line.alignedSymbols && line.alignedSymbols.length === textLen) {
+    const direct = bboxFromSymbols(line.alignedSymbols, startIndex, endIndex);
+    if (direct) return direct;
+  }
+
+  // 2. ターゲットテキストの直接シンボル照合
   const targetText = line.text.slice(startIndex, endIndex).replace(/[\s\t\u3000]/g, "");
   const symbolsToSearch = (line.alignedSymbols && line.alignedSymbols.length > 0) ? line.alignedSymbols : line.symbols;
 
@@ -538,7 +515,19 @@ function calculateBBoxForRange(
       }
     }
 
-    let matchIdx = fullSymStr.indexOf(targetText);
+    const expectedCleanStart = line.text
+      .slice(0, startIndex)
+      .replace(/[\s\t\u3000]/g, "").length;
+    const occurrences: number[] = [];
+    let occurrence = fullSymStr.indexOf(targetText);
+    while (occurrence !== -1) {
+      occurrences.push(occurrence);
+      occurrence = fullSymStr.indexOf(targetText, occurrence + 1);
+    }
+    let matchIdx = occurrences.length > 0
+      ? occurrences.reduce((best, current) =>
+          Math.abs(current - expectedCleanStart) < Math.abs(best - expectedCleanStart) ? current : best)
+      : -1;
 
     // 完全一致しない場合、末尾側（例:「田様」）や先頭側で部分一致を試行
     if (matchIdx === -1 && targetText.length >= 2) {
@@ -557,7 +546,7 @@ function calculateBBoxForRange(
     }
   }
 
-  // 2. シンボル照合ができなかった場合のフォールバック
+  // 3. シンボル照合ができなかった場合のフォールバック
   if (!resultBox) {
     if (line.alignedSymbols && line.alignedSymbols.length > 0) {
       resultBox = bboxFromSymbols(line.alignedSymbols, startIndex, endIndex);
@@ -568,7 +557,7 @@ function calculateBBoxForRange(
     resultBox = bboxFromSymbols(line.symbols, startIndex, endIndex);
   }
 
-  // 3. 単語列からの比率推定フォールバック
+  // 4. 単語列からの比率推定フォールバック
   if (!resultBox && line.words && line.words.length > 0) {
     const ratioStart = startIndex / textLen;
     const ratioEnd = endIndex / textLen;
@@ -592,7 +581,7 @@ function calculateBBoxForRange(
     resultBox = { x, y: lineBox.y0, width, height: totalH };
   }
 
-  // ★ 4. 行頭・境界アンカーによるズレの幾何学的完全補正 ★
+  // 5. 行頭・境界アンカーによるズレの幾何学的補正
   if (resultBox) {
     // A. 行頭（または空白・記号直後）から始まる語句の場合、行頭の文字のはみ出しを防止
     const prefix = line.text.slice(0, startIndex);
@@ -623,17 +612,18 @@ function calculateBBoxForRange(
 /**
  * 安全マージン（パディング）を適用し、画像境界内にクランプ
  */
-function applyPadding(
+export function applyPadding(
   rect: { x: number; y: number; width: number; height: number },
   padding: number,
   maxWidth: number,
   maxHeight: number,
-  _expandForPhoto: boolean = false
+  expandForPhoto: boolean = false
 ): { x: number; y: number; width: number; height: number } {
-  // 上下は行間を巻き込まないよう最小限（0〜2px程度）
-  const padY = Math.min(2, Math.max(0, Math.round(padding * 0.4)));
-  // 左右は文字の末尾やフォントのハネが漏れないよう十分にカバー（デフォルト+2px設定で3〜4px）
-  const padX = Math.max(2, padding + 1);
+  const scalePadX = Math.ceil(rect.height * (expandForPhoto ? 0.1 : 0.07));
+  const scalePadY = Math.ceil(rect.height * (expandForPhoto ? 0.07 : 0.04));
+  // 高解像度画像でもアンチエイリアス端が残らないよう、px指定と文字高比例の大きい方を採用。
+  const padY = Math.max(Math.round(padding * 0.4), Math.min(6, scalePadY));
+  const padX = Math.max(2, padding + 1, Math.min(10, scalePadX));
 
   const x = Math.max(0, rect.x - padX);
   const y = Math.max(0, rect.y - padY);

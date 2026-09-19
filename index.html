@@ -44,7 +44,7 @@
           📲 アプリ追加
         </button>
         <!-- AI Feature & Model Settings Button -->
-        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="AI相談プロンプト指示や判定感度、端末内AIモデルの設定">
+        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="任意のAI文章清書機能と端末内データの設定">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; opacity: 0.85;">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -111,7 +111,7 @@
 
           <!-- Auto Detect Action (Next to manual add / style) -->
           <div class="tool-group">
-            <button id="btnToolbarAutoDetect" class="tool-btn" title="画像内の個人情報をAIとルールで自動検出して黒塗り">
+            <button id="btnToolbarAutoDetect" class="tool-btn" title="画像内の個人情報をOCRと決定論的ルールで自動検出して黒塗り">
               ✨ 自動検出
             </button>
           </div>
@@ -559,7 +559,7 @@
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
               <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">AI機能・モデル設定</div>
-              <div style="font-size: 0.72rem; color: var(--text-dim);">プロンプト設定・判定感度・端末内モデル管理</div>
+              <div style="font-size: 0.72rem; color: var(--text-dim);">任意の文章清書機能・端末内データ管理</div>
             </div>
             <button id="btnOpenStorageModalFromSheet" class="btn btn-secondary btn-sm">
               設定を開く
@@ -656,20 +656,6 @@
             </select>
           </div>
 
-          <!-- Local AI Confidence Slider -->
-          <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
-              <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">端末内AI 判定感度</span>
-              <span id="aiConfidenceValDisplay" style="font-size: 0.8rem; font-weight: 600; color: #38bdf8;">標準 (50%)</span>
-            </div>
-            <p style="font-size: 0.74rem; color: var(--text-dim); margin-bottom: 0.6rem; line-height: 1.4;">
-              右（高感度）に寄せると文脈から疑わしい箇所を余さず拾い、左（低感度）に寄せると確実な個人情報のみに絞り込みます。
-            </p>
-            <div class="range-container">
-              <input type="range" id="sliderAiConfidence" class="range-input" min="20" max="80" value="50" step="5">
-            </div>
-          </div>
-
           <!-- Storage Summary Box -->
           <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -690,15 +676,6 @@
                 <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">文字認識用ニューラルLSTM辞書 (約18MB)</div>
               </div>
               <span id="statusOcrCache" class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 3px 8px; border-radius: 6px;">確認中</span>
-            </div>
-
-            <!-- NER Model Card -->
-            <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">👤 人名・組織・地名抽出 AI (NER)</div>
-                <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">BERT多言語固有表現抽出モデル (約45MB)</div>
-              </div>
-              <span id="statusNerCache" class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 0.75rem; padding: 3px 8px; border-radius: 6px;">確認中</span>
             </div>
 
             <!-- Opt-in SLM Card -->

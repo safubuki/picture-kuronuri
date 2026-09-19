@@ -1,5 +1,5 @@
 import { createWorker, PSM, type Worker } from "tesseract.js";
-import { preprocessForOcr, type OcrSourceAnalysis } from "./ocrPreprocess";
+import { preprocessForOcr, preprocessForOcrAlternative, type OcrSourceAnalysis } from "./ocrPreprocess";
 import { isCjkChar, isSpaceChar, toHalfwidthChar } from "./ocrNormalize";
 
 export interface OcrProgress {
@@ -36,11 +36,48 @@ export interface OcrResult {
   symbols: OcrChar[];
   scale: number;
   analysis?: OcrSourceAnalysis;
+  status?: "ok" | "low_confidence" | "no_text" | "timeout" | "failed";
+  warnings?: string[];
 }
 
 let cachedWorker: Worker | null = null;
 let currentLanguage: string = "jpn+eng";
 let activeProgressCallback: ((p: OcrProgress) => void) | null = null;
+
+async function recognizeWithTimeout(
+  worker: Worker,
+  input: HTMLImageElement | HTMLCanvasElement | string,
+  timeoutMs: number
+): Promise<{ data?: any } | null> {
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeoutId = globalThis.setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      worker.recognize(input, {}, { text: true, blocks: true }),
+      timeoutPromise
+    ]);
+  } finally {
+    if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
+  }
+}
+
+function getRecognitionQuality(lines: OcrLine[]): { chars: number; averageConfidence: number; score: number } {
+  let chars = 0;
+  let weightedConfidence = 0;
+  for (const line of lines) {
+    const n = line.text.replace(/\s/g, "").length;
+    chars += n;
+    weightedConfidence += line.confidence * Math.max(1, n);
+  }
+  const averageConfidence = chars > 0 ? weightedConfidence / chars : 0;
+  return {
+    chars,
+    averageConfidence,
+    score: chars * Math.max(1, averageConfidence)
+  };
+}
 
 /**
  * Tesseract.js Web Worker の初期化または取得
@@ -467,42 +504,91 @@ export async function runOcr(
 
     onProgress?.({ status: "テキスト認識・座標解析中...", progress: 0.38 });
     
-    // 25秒タイムアウト保護（Workerハングやネットワーク不通でアプリが止まるのを防止）
-    let isTimedOut = false;
-    const timeoutPromise = new Promise<{ data?: any }>((resolve) => {
-      setTimeout(async () => {
-        console.warn("OCR recognize timed out after 25s, falling back gracefully");
-        isTimedOut = true;
-        activeProgressCallback = null;
-        if (cachedWorker) {
-          try {
-            await cachedWorker.terminate();
-          } catch {
-            // ignore
-          }
-          cachedWorker = null;
-        }
-        resolve({ data: { text: "", blocks: [], lines: [] } });
-      }, 25000);
-    });
-
-    const result = await Promise.race([
-      worker.recognize(ocrInput, {}, { text: true, blocks: true }),
-      timeoutPromise
-    ]);
-
-    if (isTimedOut) {
+    // タイマーは成功時に必ず解除し、完了後にWorkerを誤って破棄しない。
+    const result = await recognizeWithTimeout(worker, ocrInput, 25000);
+    if (!result) {
+      console.warn("OCR recognize timed out after 25s");
+      activeProgressCallback = null;
+      try {
+        await worker.terminate();
+      } catch {
+        // ignore
+      }
+      cachedWorker = null;
       return {
         fullText: "",
         lines: [],
         symbols: [],
         scale: 1,
-        analysis
+        analysis,
+        status: "timeout",
+        warnings: ["OCR処理がタイムアウトしたため、自動検出結果を確認できませんでした。"]
       };
     }
 
-    const parsed = parseRecognizeData(result?.data || {});
+    let parsed = parseRecognizeData(result.data || {});
     scaleOcrGeometry(parsed.lines, parsed.symbols, scale);
+    let finalScale = scale;
+    let quality = getRecognitionQuality(parsed.lines);
+
+    // 通常認識が空、または文字数も信頼度も極端に低い時だけ二値化＋疎テキストで再試行する。
+    // 正常画像は従来どおり1回で終了するため、通常時のレスポンスは変えない。
+    const shouldRetry = typeof imageSource !== "string" &&
+      (quality.chars === 0 || (quality.chars < 24 && quality.averageConfidence < 25));
+    if (shouldRetry) {
+      onProgress?.({ status: "低信頼領域を別方式で再確認中...", progress: 0.78 });
+      try {
+        const alternative = preprocessForOcrAlternative(imageSource);
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+          preserve_interword_spaces: "0"
+        });
+        const alternativeResult = await recognizeWithTimeout(worker, alternative.canvas, 12000);
+        if (!alternativeResult) {
+          console.warn("OCR fallback pass timed out; keeping primary result");
+          try {
+            await worker.terminate();
+          } catch {
+            // ignore
+          }
+          if (cachedWorker === worker) cachedWorker = null;
+        } else {
+          const alternativeParsed = parseRecognizeData(alternativeResult.data || {});
+          scaleOcrGeometry(alternativeParsed.lines, alternativeParsed.symbols, alternative.scale);
+          const alternativeQuality = getRecognitionQuality(alternativeParsed.lines);
+          const clearlyBetter = quality.chars === 0
+            ? alternativeQuality.chars > 0
+            : alternativeQuality.score > quality.score * 1.15 &&
+              alternativeQuality.averageConfidence >= quality.averageConfidence - 3;
+          if (clearlyBetter) {
+            parsed = alternativeParsed;
+            quality = alternativeQuality;
+            finalScale = alternative.scale;
+            analysis = alternative.analysis;
+          }
+        }
+      } catch (err) {
+        console.warn("OCR fallback pass failed, keeping primary result:", err);
+      } finally {
+        if (cachedWorker === worker) {
+          try {
+            await worker.setParameters({
+              tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+              preserve_interword_spaces: "0"
+            });
+          } catch (err) {
+            console.warn("OCR parameter restore failed; worker will be recreated:", err);
+            try {
+              await worker.terminate();
+            } catch {
+              // ignore
+            }
+            cachedWorker = null;
+          }
+        }
+      }
+    }
+
     const merged = mergeFragmentedLines(parsed.lines);
 
     for (const line of merged) {
@@ -510,6 +596,17 @@ export async function runOcr(
       line.rawText = cleanJapaneseOcrText(line.rawText);
     }
     const cleanFull = cleanJapaneseOcrText(parsed.fullText || merged.map((l) => l.text).join("\n"));
+    const finalQuality = getRecognitionQuality(merged);
+    const status: OcrResult["status"] = merged.length === 0
+      ? "no_text"
+      : finalQuality.averageConfidence < 35
+      ? "low_confidence"
+      : "ok";
+    const warnings = status === "low_confidence"
+      ? ["文字認識の信頼度が低い箇所があります。黒塗り位置を確認してください。"]
+      : status === "no_text"
+      ? ["文字を認識できませんでした。必要な箇所を手動で黒塗りしてください。"]
+      : undefined;
 
     onProgress?.({ status: "完了", progress: 1.0 });
 
@@ -517,8 +614,10 @@ export async function runOcr(
       fullText: cleanFull,
       lines: merged,
       symbols: parsed.symbols,
-      scale,
-      analysis
+      scale: finalScale,
+      analysis,
+      status,
+      warnings
     };
   } finally {
     activeProgressCallback = null;

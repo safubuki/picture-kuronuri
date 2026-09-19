@@ -173,6 +173,23 @@ function detectRealPhotoAvatars(
     }
   }
 
+  // 左側に候補が1件もないレイアウトだけ、右端カラムを追加探索する。
+  // 通常のチャットで走査量を倍増させず、右寄せプロフィールUIの取りこぼしを補う。
+  if (candidates.length === 0) {
+    for (const size of sizes) {
+      const stepY = Math.max(12, Math.round(size * 0.4));
+      const rightXs = [0.03, 0.05, 0.07, 0.09, 0.11]
+        .map((r) => Math.round(sw * (1 - r)) - size)
+        .filter((x) => x >= 0 && x + size < sw);
+      for (const x of rightXs) {
+        for (let y = startY; y < endY - size; y += stepY) {
+          const score = evaluateRealPhotoFace(data, sw, sh, x, y, size);
+          if (score >= 70) candidates.push({ x, y, size, score });
+        }
+      }
+    }
+  }
+
   // スコア順にソートして重複排除
   candidates.sort((a, b) => b.score - a.score);
 
@@ -388,6 +405,22 @@ function detectCircleAvatars(
         const score = evaluateCircleAvatar(data, sw, sh, x, y, size);
         if (score >= 65) {
           candidates.push({ x, y, size, score });
+        }
+      }
+    }
+  }
+
+  // 左端に円形候補がない場合だけ右端を探索し、通常ケースの応答時間を維持する。
+  if (candidates.length === 0) {
+    for (const size of sizes) {
+      const stepY = Math.max(10, Math.round(size * 0.35));
+      const rightXs = [0.03, 0.05, 0.07, 0.09, 0.11]
+        .map((r) => Math.round(sw * (1 - r)) - size)
+        .filter((x) => x >= 0 && x + size < sw);
+      for (const x of rightXs) {
+        for (let y = startY; y < endY - size; y += stepY) {
+          const score = evaluateCircleAvatar(data, sw, sh, x, y, size);
+          if (score >= 65) candidates.push({ x, y, size, score });
         }
       }
     }

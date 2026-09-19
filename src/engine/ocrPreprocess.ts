@@ -3,6 +3,8 @@
  * 画面のカメラ撮影で起きるモアレ／ジャギー／小文字／照明ムラを抑え、
  * Tesseract が読みやすい作業画像だけを作る。表示用の元画像は変更しない。
  */
+import { adaptiveThresholdBradley } from "./adaptiveThreshold";
+
 export interface OcrSourceAnalysis {
   estimatedLineHeight: number;
   isLikelyScreenPhoto: boolean;
@@ -621,6 +623,42 @@ export function preprocessForOcr(
     scale,
     analysis
   };
+}
+
+/**
+ * 通常前処理でほとんど文字が得られなかった場合だけ使う二値化フォールバック。
+ * 常用しないことで、細い漢字の画数潰れと通常時の二重OCRコストを避ける。
+ */
+export function preprocessForOcrAlternative(
+  source: HTMLImageElement | HTMLCanvasElement
+): OcrPreprocessResult {
+  const origW = source.width;
+  const origH = source.height;
+  const analysis = analyzeOcrSource(source);
+  const scale = computeScale(origW, origH, analysis);
+  const w = Math.max(8, Math.round(origW * scale));
+  const h = Math.max(8, Math.round(origH * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return { canvas, scale, analysis };
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let gray: Uint8Array = new Uint8Array(w * h);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = luminance(data[i], data[i + 1], data[i + 2]) + 0.5;
+  }
+  if (analysis.isDarkBackground) gray = invertGray(gray);
+
+  const binary = adaptiveThresholdBradley(gray, w, h, {
+    sensitivity: analysis.isLikelyScreenPhoto ? 0.09 : 0.12,
+    darkTextOnLightBg: true
+  });
+  return { canvas: grayToCanvas(binary, w, h), scale, analysis };
 }
 
 /**

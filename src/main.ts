@@ -17,7 +17,7 @@ import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine
 import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
 import { registerSW } from "virtual:pwa-register";
 import { ModelCacheManager } from "./engine/modelCache";
-import { isLlmOptInEnabled, setLlmOptInEnabled, getLocalLlmPipeline, cleanAndRedactTextWithLlm } from "./engine/localLlm";
+import { isLlmOptInEnabled, setLlmOptInEnabled } from "./engine/aiPreferences";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -122,8 +122,6 @@ const togglePii = document.getElementById("togglePii") as HTMLInputElement;
 const toggleFollowSlope = document.getElementById("toggleFollowSlope") as HTMLInputElement;
 const sliderPadding = document.getElementById("sliderPadding") as HTMLInputElement;
 const paddingValDisplay = document.getElementById("paddingValDisplay") as HTMLSpanElement;
-const sliderAiConfidence = document.getElementById("sliderAiConfidence") as HTMLInputElement;
-const aiConfidenceValDisplay = document.getElementById("aiConfidenceValDisplay") as HTMLSpanElement;
 const btnReanalyze = document.getElementById("btnReanalyze") as HTMLButtonElement;
 
 const inputCustomKeyword = document.getElementById("inputCustomKeyword") as HTMLInputElement;
@@ -420,6 +418,12 @@ let currentPreloadedAvatars: { x: number; y: number; width: number; height: numb
 let lastOcrResult: import("./engine/ocr").OcrResult | null = null;
 let aiCleanedText: string | null = null;
 
+function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void {
+  lastOcrResult = null;
+  aiCleanedText = null;
+  appState.setSourceImage(img);
+}
+
 function updateRedactedBadge(mode: "rule" | "ai"): void {
   if (!redactedModeBadge) return;
   if (!isLlmOptInEnabled()) {
@@ -533,6 +537,31 @@ function refreshRedactedTextPreview(resetAi = false): void {
   }
 }
 
+/**
+ * エクスポート時だけ安全条件を確認する。通常の黒塗りでは追加操作を発生させない。
+ * モザイク・ぼかしは見た目上読める場合があるため、出力は不透明黒へ固定する。
+ */
+function getSafeExportRendererOptions(
+  state: AppState
+): AppState["rendererOptions"] | null {
+  const warnings: string[] = [];
+  const unsafeStyle = state.rendererOptions.style === "mosaic" || state.rendererOptions.style === "blur";
+  if (unsafeStyle) {
+    warnings.push("モザイク・ぼかしは復元や判読の余地があるため、保存画像では不透明な黒塗りに変更します。");
+  }
+  if (!lastOcrResult) {
+    warnings.push("自動検出がまだ完了していません。必要な黒塗りが揃っているか確認してください。");
+  } else if (lastOcrResult.status && lastOcrResult.status !== "ok") {
+    warnings.push(lastOcrResult.warnings?.[0] || "OCR結果に未確認箇所があります。黒塗り位置を確認してください。");
+  }
+  if (warnings.length > 0 && !confirm(`${warnings.join("\n\n")}\n\n確認のうえエクスポートしますか？`)) {
+    return null;
+  }
+  return unsafeStyle
+    ? { ...state.rendererOptions, style: "blackout" }
+    : state.rendererOptions;
+}
+
 
 async function canvasToImage(canvas: HTMLCanvasElement): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -610,7 +639,7 @@ async function ingestCapturedImage(
   lastCorrection = null;
 
   // まず元画像を画面にセットしてキャンバスを表示
-  appState.setSourceImage(img);
+  setSourceImageAndInvalidateAnalysis(img);
 
   // 正面チャットサンプル等で四隅補正をスキップする場合
   if (opts.skipPerspective) {
@@ -632,7 +661,7 @@ let currentDetectedDeskewAngle = 0;
 /**
  * 自動墨消し画像解析の実行
  */
-async function startAnalysis(): Promise<void> {
+async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
   const state = appState.getState();
   if (!state.sourceImage) return;
 
@@ -660,13 +689,14 @@ async function startAnalysis(): Promise<void> {
       }
     }
 
+    const reusableOcr = reuseOcr ? (lastOcrResult ?? currentPreloadedOcr) : currentPreloadedOcr;
     const result = await analyzeImageForRedaction(
       state.sourceImage,
       state.filterOptions,
       (p) => {
         appState.setAnalyzing(true, p.status, p.progress);
       },
-      currentPreloadedOcr,
+      reusableOcr,
       currentPreloadedAvatars,
       currentDetectedDeskewAngle
     );
@@ -678,7 +708,12 @@ async function startAnalysis(): Promise<void> {
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
     const corrNotice = lastCorrection && !lastCorrection.skipped ? " / 正対化済み" : "";
     const photoNotice = result.ocrResult.analysis?.isLikelyScreenPhoto ? " / 画面撮影向け前処理" : "";
-    showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${corrNotice}${photoNotice}`);
+    const ocrWarning = result.ocrResult.warnings?.[0];
+    if (ocrWarning) {
+      showToast(`⚠️ ${ocrWarning}`, 6000);
+    } else {
+      showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${corrNotice}${photoNotice}`);
+    }
   } catch (err) {
     console.error("Analysis failed:", err);
     showToast("画像解析中にエラーが発生しました");
@@ -950,8 +985,11 @@ function syncUiWithState(state: AppState): void {
 
       const statusSpan = document.createElement("span");
       statusSpan.style.fontSize = "0.75rem";
-      statusSpan.textContent = box.enabled ? "保護" : "解除";
-      statusSpan.style.color = box.enabled ? "var(--primary-light)" : "var(--accent-rose)";
+      const needsReview = box.enabled && typeof box.confidence === "number" && box.confidence < 0.45;
+      statusSpan.textContent = box.enabled ? (needsReview ? "要確認" : "保護") : "解除";
+      statusSpan.style.color = box.enabled
+        ? (needsReview ? "#f59e0b" : "var(--primary-light)")
+        : "var(--accent-rose)";
 
       itemEl.appendChild(left);
       itemEl.appendChild(statusSpan);
@@ -983,6 +1021,9 @@ function syncUiWithState(state: AppState): void {
     tag.querySelector(".tag-remove")?.addEventListener("click", () => {
       const nextKws = state.filterOptions.customKeywords.filter(k => k !== kw);
       appState.setFilterOptions({ customKeywords: nextKws });
+      if (appState.getState().sourceImage && lastOcrResult) {
+        void startAnalysis(true);
+      }
     });
     customTagsList.appendChild(tag);
   });
@@ -1388,7 +1429,7 @@ function initEvents(): void {
   });
   btnReset.addEventListener("click", () => {
     if (confirm("現在の画像を閉じて新しく始めますか？")) {
-      appState.setSourceImage(null);
+      setSourceImageAndInvalidateAnalysis(null);
     }
   });
 
@@ -1410,7 +1451,7 @@ function initEvents(): void {
       lastCorrection = corrected;
       currentPreloadedOcr = undefined;
       currentPreloadedAvatars = undefined;
-      appState.setSourceImage(corrected.image);
+      setSourceImageAndInvalidateAnalysis(corrected.image);
       const desc = [
         corrected.appliedPerspective ? "台形正対化" : "",
         corrected.deskewAngle !== 0 ? `水平傾き(${corrected.deskewAngle > 0 ? "+" : ""}${corrected.deskewAngle.toFixed(1)}°)` : "",
@@ -1443,7 +1484,7 @@ function initEvents(): void {
     const deskewed = await rotateAndDeskewImage(state.sourceImage, -angle);
     currentPreloadedOcr = undefined;
     currentPreloadedAvatars = undefined;
-    appState.setSourceImage(deskewed);
+    setSourceImageAndInvalidateAnalysis(deskewed);
     startAnalysis();
     showToast(`水平補正（${angle > 0 ? "+" : ""}${angle.toFixed(1)}°）を実行し再解析しました`);
   });
@@ -1512,7 +1553,7 @@ function initEvents(): void {
       // 5. 正対化された画像をセットし、黒塗り解析（OCR＋個人情報検出）を実行！
       currentPreloadedOcr = undefined;
       currentPreloadedAvatars = undefined;
-      appState.setSourceImage(correctedImg);
+      setSourceImageAndInvalidateAnalysis(correctedImg);
       await startAnalysis();
       showToast("✨ 台形正対化と黒塗りが完了しました！");
     } catch (err) {
@@ -1532,7 +1573,7 @@ function initEvents(): void {
     const rotated = await rotateImage90(state.sourceImage, false);
     currentPreloadedOcr = undefined;
     currentPreloadedAvatars = undefined;
-    appState.setSourceImage(rotated);
+    setSourceImageAndInvalidateAnalysis(rotated);
     startAnalysis();
   });
 
@@ -1543,7 +1584,7 @@ function initEvents(): void {
     const rotated = await rotateImage90(state.sourceImage, true);
     currentPreloadedOcr = undefined;
     currentPreloadedAvatars = undefined;
-    appState.setSourceImage(rotated);
+    setSourceImageAndInvalidateAnalysis(rotated);
     startAnalysis();
   });
 
@@ -1552,7 +1593,9 @@ function initEvents(): void {
     if (!state.sourceImage) return;
     showToast("モアレ低減・コントラスト強調を実行中...");
     const enhanced = await enhanceImageForOcr(state.sourceImage);
-    appState.setSourceImage(enhanced);
+    currentPreloadedOcr = undefined;
+    currentPreloadedAvatars = undefined;
+    setSourceImageAndInvalidateAnalysis(enhanced);
     startAnalysis();
   });
 
@@ -1566,7 +1609,7 @@ function initEvents(): void {
     const deskewed = await rotateAndDeskewImage(state.sourceImage, angle);
     currentPreloadedOcr = undefined;
     currentPreloadedAvatars = undefined;
-    appState.setSourceImage(deskewed);
+    setSourceImageAndInvalidateAnalysis(deskewed);
     startAnalysis();
   });
 
@@ -1577,7 +1620,7 @@ function initEvents(): void {
 
   // 再解析
   btnReanalyze.addEventListener("click", () => {
-    startAnalysis();
+    startAnalysis(true);
   });
 
   // フィルタースイッチ
@@ -1597,7 +1640,7 @@ function initEvents(): void {
     appState.setFilterOptions({ detectPii: togglePii.checked });
   });
   toggleFollowSlope.addEventListener("change", () => {
-    startAnalysis();
+    startAnalysis(true);
   });
 
   // 安全マージン（パディング）スライダー
@@ -1608,39 +1651,9 @@ function initEvents(): void {
   });
   sliderPadding.addEventListener("change", () => {
     if (appState.getState().sourceImage) {
-      startAnalysis();
+      startAnalysis(true);
     }
   });
-
-  // 端末内AI 判定感度スライダー
-  if (sliderAiConfidence && aiConfidenceValDisplay) {
-    sliderAiConfidence.addEventListener("input", () => {
-      const sensitivity = parseInt(sliderAiConfidence.value, 10);
-      let label = `${sensitivity}%`;
-      if (sensitivity >= 65) {
-        label = `高感度 (${sensitivity}%) - 漏れ防止`;
-      } else if (sensitivity <= 35) {
-        label = `低感度 (${sensitivity}%) - 確実重視`;
-      } else {
-        label = `標準 (${sensitivity}%)`;
-      }
-      aiConfidenceValDisplay.textContent = label;
-
-      // 感度（高いほど漏れを防ぎしきい値を下げる、低いほど誤検知を防ぎしきい値を上げて厳格化）
-      // 20% -> threshold 0.80 (低感度・確実重視)
-      // 50% -> threshold 0.55 (標準)
-      // 80% -> threshold 0.35 (高感度・漏れ防止)
-      const threshold = 1.0 - (sensitivity / 100 * 0.75);
-      const clamped = Math.max(0.25, Math.min(0.85, threshold));
-      appState.setFilterOptions({ aiConfidenceThreshold: clamped });
-    });
-
-    sliderAiConfidence.addEventListener("change", () => {
-      if (appState.getState().sourceImage) {
-        startAnalysis();
-      }
-    });
-  }
 
   // カスタムキーワード追加
   const addKeywordAction = () => {
@@ -1650,7 +1663,12 @@ function initEvents(): void {
     if (!current.includes(kw)) {
       appState.setFilterOptions({ customKeywords: [...current, kw] });
       inputCustomKeyword.value = "";
-      showToast(`キーワード「${kw}」を追加しました。再解析で反映されます`);
+      if (appState.getState().sourceImage && lastOcrResult) {
+        showToast(`キーワード「${kw}」を追加し、検出結果へ反映しています`);
+        void startAnalysis(true);
+      } else {
+        showToast(`キーワード「${kw}」を追加しました`);
+      }
     }
   };
   btnAddKeyword.addEventListener("click", addKeywordAction);
@@ -1662,6 +1680,8 @@ function initEvents(): void {
   btnCopyImage.addEventListener("click", async () => {
     const state = appState.getState();
     if (!state.sourceImage) return;
+    const exportOptions = getSafeExportRendererOptions(state);
+    if (!exportOptions) return;
 
     // クリップボード用オフスクリーンCanvasの生成（装飾枠線なし）
     const exportCanvas = document.createElement("canvas");
@@ -1674,7 +1694,7 @@ function initEvents(): void {
       eCtx,
       state.sourceImage,
       state.boxes,
-      state.rendererOptions,
+      exportOptions,
       true
     );
 
@@ -1685,6 +1705,8 @@ function initEvents(): void {
   btnDownloadImage.addEventListener("click", () => {
     const state = appState.getState();
     if (!state.sourceImage) return;
+    const exportOptions = getSafeExportRendererOptions(state);
+    if (!exportOptions) return;
 
     const exportCanvas = document.createElement("canvas");
     exportCanvas.width = state.sourceImage.width;
@@ -1696,7 +1718,7 @@ function initEvents(): void {
       eCtx,
       state.sourceImage,
       state.boxes,
-      state.rendererOptions,
+      exportOptions,
       true
     );
 
@@ -1800,6 +1822,7 @@ function initEvents(): void {
       showToast("🤖 文脈AIが文章を清書・高精度伏字化しています...", 5000);
 
       try {
+        const { cleanAndRedactTextWithLlm } = await import("./engine/localLlm");
         const cleaned = await cleanAndRedactTextWithLlm(textToClean, (status) => {
           showToast(`🤖 ${status}`, 3000);
         });
@@ -2546,7 +2569,6 @@ function initPwaAndStorageManager(): void {
 
   const storageTotalBytes = document.getElementById("storageTotalBytes") as HTMLSpanElement | null;
   const statusOcrCache = document.getElementById("statusOcrCache") as HTMLSpanElement | null;
-  const statusNerCache = document.getElementById("statusNerCache") as HTMLSpanElement | null;
   const statusLlmCache = document.getElementById("statusLlmCache") as HTMLSpanElement | null;
   const llmCachedActions = document.getElementById("llmCachedActions") as HTMLDivElement | null;
   const btnDeleteLlmData = document.getElementById("btnDeleteLlmData") as HTMLButtonElement | null;
@@ -2573,10 +2595,6 @@ function initPwaAndStorageManager(): void {
       if (statusOcrCache) {
         statusOcrCache.textContent = stats.models.ocr.isCached ? "保存済み" : "自動取得";
         statusOcrCache.style.color = stats.models.ocr.isCached ? "#10b981" : "var(--text-dim)";
-      }
-      if (statusNerCache) {
-        statusNerCache.textContent = stats.models.ner.isCached ? "保存済み" : "初回解析時に保存";
-        statusNerCache.style.color = stats.models.ner.isCached ? "#10b981" : "var(--text-dim)";
       }
       if (statusLlmCache) {
         if (stats.models.llm.isCached) {
@@ -2621,6 +2639,7 @@ function initPwaAndStorageManager(): void {
         if (llmProgressContainer) llmProgressContainer.style.display = "block";
         showToast("🤖 文脈理解AI（LLM）の初期化を開始します");
         try {
+          const { getLocalLlmPipeline } = await import("./engine/localLlm");
           const pipe = await getLocalLlmPipeline((status, progress) => {
             if (llmProgressStatus) llmProgressStatus.textContent = status;
             if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
@@ -2637,7 +2656,7 @@ function initPwaAndStorageManager(): void {
           if (toggleLlm) toggleLlm.checked = false;
           updateToggleUi(false);
           updateRedactedUiByLlmOptIn();
-          showToast("⚠️ お使いの端末環境では文脈AIの初期化が完了できませんでした。通常モード（高精度NER＋ルールベース）で保護します");
+          showToast("⚠️ 文脈AIを利用できませんでした。通常のOCR＋ルール検出は引き続き利用できます");
           await updateStorageStats();
         } finally {
           if (llmProgressContainer) llmProgressContainer.style.display = "none";

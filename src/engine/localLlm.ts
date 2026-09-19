@@ -5,31 +5,15 @@
  */
 
 import { pipeline } from "@huggingface/transformers";
+import { isLlmOptInEnabled } from "./aiPreferences";
 
 const LLM_MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
-const LLM_OPT_IN_KEY = "kuronuri_llm_opt_in";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let llmPipelineInstance: any = null;
 let isLlmLoading = false;
 
 export type LlmProgressCallback = (status: string, progress: number) => void;
-
-/**
- * ユーザーがLLMオプトインを有効にしているか判定
- */
-export function isLlmOptInEnabled(): boolean {
-  if (typeof localStorage === "undefined") return false;
-  return localStorage.getItem(LLM_OPT_IN_KEY) === "true";
-}
-
-/**
- * LLMオプトイン設定を保存
- */
-export function setLlmOptInEnabled(enabled: boolean): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(LLM_OPT_IN_KEY, enabled ? "true" : "false");
-}
 
 /**
  * WebGPU が実際に使用可能か検証（アダプター取得まで確認）
@@ -320,4 +304,3 @@ export async function cleanAndRedactTextWithLlm(
   onProgress?.("清書完了", 1.0);
   return cleaned || inputRawText;
 }
-

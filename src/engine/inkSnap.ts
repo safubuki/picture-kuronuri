@@ -116,7 +116,9 @@ function fitWindowToInk(
  */
 export function snapBoxesToInk(
   source: HTMLImageElement | HTMLCanvasElement,
-  boxes: { type: string; isManual?: boolean; rect: InkRect }[]
+  boxes: { type: string; isManual?: boolean; rect: InkRect }[],
+  requestedPadding: number = 1,
+  expandForPhoto: boolean = false
 ): void {
   const w = source.width;
   const h = source.height;
@@ -139,10 +141,12 @@ export function snapBoxesToInk(
     if (box.isManual || box.type === "face" || box.type === "avatar") continue;
     const fitted = fitWindowToInk(gray, w, h, box.rect);
     if (!fitted) continue;
-    const pad = 1;
-    box.rect.x = Math.max(0, fitted.x - pad);
-    box.rect.y = Math.max(0, fitted.y - pad);
-    box.rect.width = Math.min(w - box.rect.x, fitted.width + pad * 2);
-    box.rect.height = Math.min(h - box.rect.y, fitted.height + pad * 2);
+    // インク位置へ合わせた後で、ユーザー指定の安全余白を必ず再適用する。
+    const padX = Math.max(2, requestedPadding + 1, Math.min(10, Math.ceil(fitted.height * (expandForPhoto ? 0.1 : 0.07))));
+    const padY = Math.max(Math.round(requestedPadding * 0.4), Math.min(6, Math.ceil(fitted.height * (expandForPhoto ? 0.07 : 0.04))));
+    box.rect.x = Math.max(0, fitted.x - padX);
+    box.rect.y = Math.max(0, fitted.y - padY);
+    box.rect.width = Math.min(w - box.rect.x, fitted.width + padX * 2);
+    box.rect.height = Math.min(h - box.rect.y, fitted.height + padY * 2);
   }
 }

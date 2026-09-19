@@ -394,7 +394,7 @@ export function generateSkewedChatSampleImage(): { dataUrl: string } {
 export function generateDashboardSampleImage(): SampleChatResult {
   const canvas = document.createElement("canvas");
   const w = 820;
-  const h = 1180;
+  const h = 1220;
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d");
@@ -486,9 +486,12 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.fillText("👤 マイアカウント管理ダッシュボード", 35, 142);
 
   // 4. カード1: ユーザープロフィール（個人情報 & 顔写真）
+  // 左列（写真＋キャプション）と右列（項目）が重ならないよう列幅を固定する
   const card1Y = 175;
-  const card1H = 390;
-  drawCard(ctx, 35, card1Y, w - 70, card1H, "プロフィール・連絡先情報");
+  const card1H = 410;
+  const cardX = 35;
+  const cardW = w - 70;
+  drawCard(ctx, cardX, card1Y, cardW, card1H, "プロフィール・連絡先情報");
 
   // 顔写真（アバター）座標: カードヘッダー線（card1Y + 46）の下に十分なマージンを空けて配置
   const faceX = 55;
@@ -501,13 +504,18 @@ export function generateDashboardSampleImage(): SampleChatResult {
   // 本人の顔写真ポートレート描画（プライベート感のある普段着・自撮り風）
   drawRealisticPortrait(ctx, faceX, faceY, faceSize);
 
-  // 写真下の変更リンク風テキスト
+  // 写真下の変更リンク。写真幅に収まる1行にし、右列へはみ出さない
+  ctx.save();
   ctx.fillStyle = "#0284c7";
-  ctx.font = "13px sans-serif";
-  ctx.fillText("📷 プロフィール写真を変更", faceX, faceY + faceSize + 22);
+  ctx.font = "12px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("写真を変更", faceX + faceSize / 2, faceY + faceSize + 12);
+  ctx.restore();
 
-  // 個人情報フィールド群（右側エリア）
-  const infoX = 205;
+  // 個人情報フィールド群（右側エリア）。左列右端＋余白から開始
+  const infoX = faceX + faceSize + 36;
+  const infoMaxW = cardX + cardW - 20 - infoX;
   let curY = card1Y + 70;
 
   // 氏名（お名前）
@@ -518,7 +526,7 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.font = "bold 18px sans-serif";
   ctx.fillText("佐々木 葵（Aoi Sasaki）", infoX, curY + 24);
   recordLine("佐々木 葵（Aoi Sasaki）", infoX, curY + 4, "bold 18px sans-serif", 24);
-  curY += 60;
+  curY += 62;
 
   // アカウントID / ニックネーム
   ctx.fillStyle = "#64748b";
@@ -528,7 +536,7 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.font = "15px sans-serif";
   ctx.fillText("@aoi_lifestyle", infoX, curY + 20);
   recordLine("@aoi_lifestyle", infoX, curY + 4, "15px sans-serif", 20);
-  curY += 54;
+  curY += 56;
 
   // メールアドレス
   ctx.fillStyle = "#64748b";
@@ -538,7 +546,7 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.font = "bold 16px sans-serif";
   ctx.fillText("Email: aoi.sasaki92@sample-mail.jp", infoX, curY + 22);
   recordLine("Email: aoi.sasaki92@sample-mail.jp", infoX, curY + 4, "bold 16px sans-serif", 22);
-  curY += 54;
+  curY += 56;
 
   // 携帯電話番号
   ctx.fillStyle = "#64748b";
@@ -548,7 +556,7 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.font = "16px sans-serif";
   ctx.fillText("TEL: 090-6543-2109", infoX, curY + 20);
   recordLine("TEL: 090-6543-2109", infoX, curY + 4, "16px sans-serif", 20);
-  curY += 54;
+  curY += 56;
 
   // 自宅住所（お届け先）
   ctx.fillStyle = "#64748b";
@@ -556,8 +564,12 @@ export function generateDashboardSampleImage(): SampleChatResult {
   ctx.fillText("自宅お届け先住所", infoX, curY);
   ctx.fillStyle = "#1e293b";
   ctx.font = "15px sans-serif";
-  ctx.fillText("住所: 東京都世田谷区桜新町2-15-8 メゾンサクラ302", infoX, curY + 20);
-  recordLine("住所: 東京都世田谷区桜新町2-15-8 メゾンサクラ302", infoX, curY + 4, "15px sans-serif", 20);
+  const addressText = "住所: 東京都世田谷区桜新町2-15-8 メゾンサクラ302";
+  const addressLines = wrapCanvasText(ctx, addressText, infoMaxW);
+  addressLines.forEach((line, idx) => {
+    ctx.fillText(line, infoX, curY + 20 + idx * 20);
+    recordLine(line, infoX, curY + 4 + idx * 20, "15px sans-serif", 20);
+  });
 
   // 5. カード2: プライベート サブスク & 決済情報
   const card2Y = card1Y + card1H + 20;
@@ -647,6 +659,31 @@ export function generateDashboardSampleImage(): SampleChatResult {
     },
     avatars
   };
+}
+
+/**
+ * Canvas 上の文字列を maxWidth に収まるよう1文字ずつ折り返す
+ */
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  if (!text) return [];
+  if (maxWidth <= 0) return [text];
+  const lines: string[] = [];
+  let current = "";
+  for (const ch of text) {
+    const trial = current + ch;
+    if (current.length > 0 && ctx.measureText(trial).width > maxWidth) {
+      lines.push(current);
+      current = ch;
+    } else {
+      current = trial;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
 /**

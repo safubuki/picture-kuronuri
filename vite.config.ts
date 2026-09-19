@@ -37,10 +37,11 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm}'],
+        // 任意のAI文章清書ランタイムは、通常の黒塗り起動では取得しない。
+        globIgnores: ['**/ort-*.wasm', '**/localLlm-*.js'],
         // WASMファイル(約24MB)を含むためキャッシュ上限サイズを拡張
         maximumFileSizeToCacheInBytes: 35 * 1024 * 1024
       }
     })
   ]
 });
-
