@@ -144,11 +144,10 @@ const toast = document.getElementById("toast") as HTMLDivElement;
 const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 
 // Mobile Quick Bar & Sheet Drawer Elements
+const btnMobileSelect = document.getElementById("btnMobileSelect") as HTMLButtonElement | null;
+const btnMobileDraw = document.getElementById("btnMobileDraw") as HTMLButtonElement | null;
 const btnMobileCopy = document.getElementById("btnMobileCopy") as HTMLButtonElement | null;
 const btnMobileDownload = document.getElementById("btnMobileDownload") as HTMLButtonElement | null;
-const btnMobileBadge = document.getElementById("btnMobileBadge") as HTMLButtonElement | null;
-const mobileBadgeCount = document.getElementById("mobileBadgeCount") as HTMLSpanElement | null;
-const btnMobileOpenSheet = document.getElementById("btnMobileOpenSheet") as HTMLButtonElement | null;
 const btnHeaderMenu = document.getElementById("btnHeaderMenu") as HTMLButtonElement | null;
 const sidebarPanel = document.getElementById("sidebarPanel") as HTMLElement | null;
 const sheetBackdrop = document.getElementById("sheetBackdrop") as HTMLDivElement | null;
@@ -476,7 +475,7 @@ function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void
   cachedDeskewAngle = null;
   currentDetectedDeskewAngle = 0;
   pendingManualBoxId = null;
-  manualDrawArmed = img !== null;
+  manualDrawArmed = false;
   edgeAdjust = null;
   isPerspectiveMode = false;
   perspectiveCorners = null;
@@ -709,7 +708,7 @@ async function ingestCapturedImage(
   lastCorrection = null;
 
   setSourceImageAndInvalidateAnalysis(img);
-  appState.setMode("draw");
+  appState.setMode("select");
   void detectLinesForManualGuides(img);
 }
 
@@ -1065,17 +1064,23 @@ function rotationForManualStroke(snap: SnapResult | null): number | undefined {
   return angle;
 }
 
-/** ラベル選択・確定で黒塗りを確定し、編集モーダルを閉じる。以降のドラッグは画面移動。 */
-function confirmPendingRedaction(): void {
+/** 確定・キャンセル後は編集モードへ戻す。追加ボタンの見た目と操作を一致させる。 */
+function enterEditMode(): void {
   pendingManualBoxId = null;
   manualDrawArmed = false;
   hideBoxEditorPopover();
+  const state = appState.getState();
+  if (state.mode !== "select") appState.setMode("select");
   if (appState.getState().selectedBoxId !== null) {
     appState.setSelectedBoxId(null);
   } else {
     updateCanvasRender();
   }
   syncDrawCursor();
+}
+
+function confirmPendingRedaction(): void {
+  enterEditMode();
 }
 
 function pendingManualBox(): RedactBox | undefined {
@@ -1263,6 +1268,13 @@ function syncUiWithState(state: AppState): void {
   toolDrawMode.classList.toggle("active", drawOn);
   toolSelectMode.setAttribute("aria-pressed", selectOn ? "true" : "false");
   toolDrawMode.setAttribute("aria-pressed", drawOn ? "true" : "false");
+  btnMobileSelect?.classList.toggle("active", selectOn);
+  btnMobileDraw?.classList.toggle("active", drawOn);
+  btnMobileSelect?.setAttribute("aria-pressed", selectOn ? "true" : "false");
+  btnMobileDraw?.setAttribute("aria-pressed", drawOn ? "true" : "false");
+  const hintAdd = !!state.sourceImage && !drawOn;
+  toolDrawMode.classList.toggle("add-hint", hintAdd);
+  btnMobileDraw?.classList.toggle("add-hint", hintAdd);
 
   if (selectRedactStyle) {
     selectRedactStyle.value = state.rendererOptions.style;
@@ -1306,7 +1318,6 @@ function syncUiWithState(state: AppState): void {
   }
 
   totalBadgeCount.textContent = `${enabledCount} 件保護中`;
-  if (mobileBadgeCount) mobileBadgeCount.textContent = `${enabledCount}件`;
   statFace.textContent = String(faceCount);
   statPerson.textContent = String(personCount);
   statCompany.textContent = String(companyCount);
@@ -1508,7 +1519,7 @@ async function capturePhotoFromStream(): Promise<void> {
   ctx.drawImage(cameraVideo, 0, 0, vw, vh);
 
   closeLiveCameraModal();
-  showToast("撮影しました。ドラッグして黒塗りできます", 3500);
+  showToast("撮影しました。黒塗追加から線を引けます", 3500);
 
   const dataUrl = capCanvas.toDataURL("image/png");
   const img = new Image();
@@ -1644,7 +1655,9 @@ function initEvents(): void {
 
   // 操作モード切り替え
   toolSelectMode.addEventListener("click", () => {
+    manualDrawArmed = false;
     appState.setMode("select");
+    syncDrawCursor();
   });
   toolDrawMode.addEventListener("click", () => {
     pendingManualBoxId = null;
@@ -1654,6 +1667,8 @@ function initEvents(): void {
     appState.setMode("draw");
     syncDrawCursor();
   });
+  btnMobileSelect?.addEventListener("click", () => toolSelectMode.click());
+  btnMobileDraw?.addEventListener("click", () => toolDrawMode.click());
 
   // 墨消しスタイル切り替え (ドロップダウン)
   if (selectRedactStyle) {
@@ -1727,28 +1742,17 @@ function initEvents(): void {
       btnPopoverDelete.addEventListener("click", () => {
         const state = appState.getState();
         if (!state.selectedBoxId) return;
-        if (state.selectedBoxId === pendingManualBoxId) {
-          pendingManualBoxId = null;
-          manualDrawArmed = false;
-        }
         appState.removeBox(state.selectedBoxId);
         hideBoxEditorPopover();
-        updateCanvasRender();
         refreshRedactedTextPreview(true);
         showToast("🗑️ 黒塗りを削除しました");
+        enterEditMode();
       });
     }
 
-    // 閉じるボタンはモーダルだけ隠し、確定前なら同じ行への追加でまだ伸ばせる
     if (btnPopoverClose) {
       btnPopoverClose.addEventListener("click", () => {
-        const selected = appState.getState().selectedBoxId;
-        if (selected && selected === pendingManualBoxId) {
-          hideBoxEditorPopover();
-          return;
-        }
-        hideBoxEditorPopover();
-        appState.setSelectedBoxId(null);
+        enterEditMode();
       });
     }
   }
@@ -2810,16 +2814,8 @@ function initMobileSheetAndActions(): void {
     btnDownloadImage.click();
   });
 
-  btnMobileOpenSheet?.addEventListener("click", () => {
-    openSheet();
-  });
-
   btnHeaderMenu?.addEventListener("click", () => {
     openSheet();
-  });
-
-  btnMobileBadge?.addEventListener("click", () => {
-    openSheet("cardDetectedList");
   });
 
   // シート閉じる操作

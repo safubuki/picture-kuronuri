@@ -30,7 +30,7 @@ export const initialState: AppState = {
   historyIndex: -1,
   filterOptions: { ...DEFAULT_FILTER_OPTIONS },
   rendererOptions: { ...DEFAULT_RENDERER_OPTIONS },
-  mode: "draw",
+  mode: "select",
   isAnalyzing: false,
   progressText: "",
   progressPercent: 0,

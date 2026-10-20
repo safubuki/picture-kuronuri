@@ -409,6 +409,16 @@ body::before {
   box-shadow: 0 0 0 1px #7dd3fc, 0 0 12px var(--primary-glow);
 }
 
+@keyframes addHintPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.15); }
+  50% { box-shadow: 0 0 14px 3px rgba(56, 189, 248, 0.55); }
+}
+
+.tool-btn.add-hint,
+.btn-mobile-mode.add-hint {
+  animation: addHintPulse 1.8s ease-in-out infinite;
+}
+
 .tool-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -648,8 +658,8 @@ body::before {
 
 .action-buttons-group {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   gap: 0.75rem;
 }
 
@@ -831,7 +841,7 @@ body::before {
 
 @media (max-width: 768px) {
   .zoom-controls {
-    bottom: 4.85rem;
+    bottom: 0.45rem;
     left: 50%;
     transform: translateX(-50%);
     padding: 0.25rem 0.4rem;
@@ -1393,14 +1403,18 @@ input:checked + .slider:before {
     max-height: 65vh;
   }
 
-  /* Zoom controls placed cleanly above mobile action bar */
+  /* 拡大バーは画像エリアの下端。操作バーはキャンバスの外にある */
   .zoom-controls {
-    bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px)) !important;
+    bottom: 0.4rem !important;
     left: 50% !important;
     right: auto !important;
     transform: translateX(-50%) !important;
     max-width: calc(100% - 1.5rem);
     z-index: 35 !important;
+  }
+
+  .tool-mode-group {
+    display: none;
   }
 
   /* Fixed Mobile Quick Action Bar at bottom */
@@ -1421,16 +1435,36 @@ input:checked + .slider:before {
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
   }
 
-  .btn-mobile-main {
-    flex: 1.6;
-    padding: 0.6rem 0.75rem;
-    font-size: 0.88rem;
+  .btn-mobile-mode {
+    flex: 1;
+    padding: 0.55rem 0.35rem;
+    font-size: 0.78rem;
     font-weight: 700;
-    gap: 0.35rem;
     border-radius: var(--radius-sm);
-    box-shadow: 0 3px 12px rgba(2, 132, 199, 0.4);
-    background: linear-gradient(135deg, #0284c7, #2563eb);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+  }
+
+  .btn-mobile-mode.active,
+  .btn-mobile-mode.active:hover,
+  .btn-mobile-mode.active:focus,
+  .btn-mobile-mode.active:active {
+    background: #0284c7;
+    background-color: #0284c7;
     color: #ffffff;
+    box-shadow: 0 0 0 1px #7dd3fc;
+  }
+
+  .btn-mobile-main {
+    flex: 1;
+    padding: 0.55rem 0.4rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    gap: 0.25rem;
+    border-radius: var(--radius-sm);
+    box-shadow: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
   }
 
   .btn-mobile-sub {
@@ -1473,8 +1507,7 @@ input:checked + .slider:before {
     font-size: 0.85rem;
   }
 
-  /* 下の「設定」と役割が重なる歯車、文字を消すと空になるサンプルボタンを残さない */
-  #btnHeaderMenu,
+  /* AI設定はシート内。ヘッダーには「設定」だけ残す */
   #btnOpenStorageModal {
     display: none;
   }
@@ -1665,10 +1698,10 @@ input:checked + .slider:before {
     text-align: center;
   }
 
-  /* 黒塗り編集は下端に寄せ、上の画像を残す */
+  /* 編集パネルのすぐ上。画面上部までは上げない */
   .canvas-viewport.editor-open .zoom-controls {
-    top: 0.4rem !important;
-    bottom: auto !important;
+    top: auto !important;
+    bottom: calc(min(48%, 256px) + 8px) !important;
   }
 
   .box-editor-popover.is-docked {

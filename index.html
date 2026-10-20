@@ -87,8 +87,8 @@
           <span class="btn-text">撮影 / 選択</span>
         </button>
         <!-- Mobile Menu Trigger Button -->
-        <button id="btnHeaderMenu" class="btn btn-secondary btn-sm mobile-header-menu-btn" title="詳細設定・ツールを開く">
-          ⚙️
+        <button id="btnHeaderMenu" class="btn btn-secondary btn-sm mobile-header-menu-btn" title="設定を開く">
+          設定
         </button>
       </div>
     </header>
@@ -101,11 +101,11 @@
         <div class="workspace-toolbar">
           <!-- Operation Mode -->
           <div class="tool-group tool-mode-group">
-            <button id="toolSelectMode" class="tool-btn" title="黒塗りをタップして編集・解除">
-              👆 選択/編集
+            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして編集。ドラッグで画面を移動">
+              👆 編集
             </button>
-            <button id="toolDrawMode" class="tool-btn active" title="黒塗りを1本引きます。引いたあとは端の調整と画面移動です。次の線はこのボタンを押してから">
-              ✍️ 手動追加
+            <button id="toolDrawMode" class="tool-btn" title="黒塗りを1本引きます。確定すると編集に戻ります">
+              ✍️ 黒塗追加
             </button>
           </div>
 
@@ -177,23 +177,23 @@
                 <line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
             </div>
-            <h3>スマホで撮影、または写真をドロップ</h3>
-            <p>読み込むと文字行を自動で検出し、ガイドを表示します。ドラッグでその行を黒塗りできます。個人情報の自動検出と台形補正は、必要なときだけ実行します。</p>
+            <h3>写真を選択、またはドロップ</h3>
+            <p>読み込むと文字行を自動で検出し、ガイドを表示します。位置合わせは編集、線を足すときは黒塗追加です。</p>
             <div class="action-buttons-group">
-              <button id="btnTakePhoto" class="btn btn-camera">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                  <circle cx="12" cy="13" r="4"/>
-                </svg>
-                カメラで撮影
-              </button>
-              <button id="btnSelectFile" class="btn btn-secondary">
+              <button id="btnSelectFile" class="btn btn-primary">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                   <circle cx="8.5" cy="8.5" r="1.5"/>
                   <polyline points="21 15 16 10 5 21"/>
                 </svg>
                 写真を選択
+              </button>
+              <button id="btnTakePhoto" class="btn btn-camera">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+                カメラで撮影
               </button>
             </div>
             <div style="margin-top: 1.25rem; font-size: 0.78rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 0.35rem; align-items: center;">
@@ -290,6 +290,12 @@
 
       <!-- Mobile Quick Action Bar (Only visible on mobile <= 768px) -->
       <nav id="mobileActionBar" class="mobile-action-bar" aria-label="モバイルクイック操作">
+        <button id="btnMobileSelect" class="btn btn-secondary btn-mobile-mode" type="button" title="黒塗りをタップして編集。ドラッグで画面を移動">
+          編集
+        </button>
+        <button id="btnMobileDraw" class="btn btn-secondary btn-mobile-mode" type="button" title="黒塗りを1本引きます。確定すると編集に戻ります">
+          黒塗追加
+        </button>
         <button id="btnMobileCopy" class="btn btn-primary btn-mobile-main" title="画像をクリップボードにコピー">
           <span class="action-icon">📋</span>
           <span class="action-text">コピー</span>
@@ -297,14 +303,6 @@
         <button id="btnMobileDownload" class="btn btn-secondary btn-mobile-sub" title="PNG画像をダウンロード">
           <span class="action-icon">📥</span>
           <span class="action-text">保存</span>
-        </button>
-        <button id="btnMobileBadge" class="btn btn-secondary btn-mobile-badge" title="タップして保護箇所一覧を表示">
-          <span class="action-icon">🛡️</span>
-          <span id="mobileBadgeCount">0件</span>
-        </button>
-        <button id="btnMobileOpenSheet" class="btn btn-secondary btn-mobile-menu" title="詳細設定・補正メニューを開く">
-          <span class="action-icon">⚙️</span>
-          <span class="action-text">設定</span>
         </button>
       </nav>
 
