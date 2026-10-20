@@ -2,6 +2,7 @@ import { appState, type AppState } from "./state/appState";
 import { analyzeImageForRedaction, type RedactBox } from "./engine/redactionEngine";
 import { renderRedactedCanvas, findBoxAtPosition, renderLineGuides } from "./engine/canvasRenderer";
 import { calculateLineSnap, type SnapResult } from "./engine/lineSnap";
+import { extendRectOnSameLine, rectsShareRedactionLine } from "./engine/manualStroke";
 import { generateChatSampleImage, generateDashboardSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
 import { copyCanvasToClipboard, downloadCanvasImage, copyAiPromptToClipboard } from "./utils/exportUtils";
 import { rotateImage90, rotateAndDeskewImage, enhanceImageForOcr } from "./utils/imageEnhance";
@@ -18,6 +19,9 @@ import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/red
 import { registerSW } from "virtual:pwa-register";
 import { ModelCacheManager } from "./engine/modelCache";
 import { isLlmOptInEnabled, setLlmOptInEnabled } from "./engine/aiPreferences";
+import { runOcr } from "./engine/ocr";
+import { LOCAL_LLM_DISPLAY_NAME, LOCAL_LLM_DOWNLOAD_LABEL } from "./engine/localLlmConfig";
+import type { LlmAnalysisSummary } from "./engine/llmRedaction";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -94,6 +98,7 @@ const btnApplyPopoverCustom = document.getElementById("btnApplyPopoverCustom") a
 const btnPopoverToggle = document.getElementById("btnPopoverToggle") as HTMLButtonElement;
 const popoverToggleText = document.getElementById("popoverToggleText") as HTMLSpanElement;
 const btnPopoverDelete = document.getElementById("btnPopoverDelete") as HTMLButtonElement;
+const btnPopoverConfirm = document.getElementById("btnPopoverConfirm") as HTMLButtonElement;
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -135,6 +140,7 @@ const statPerson = document.getElementById("statPerson") as HTMLSpanElement;
 const statCompany = document.getElementById("statCompany") as HTMLSpanElement;
 const statPii = document.getElementById("statPii") as HTMLSpanElement;
 const detectedItemsList = document.getElementById("detectedItemsList") as HTMLDivElement;
+const llmDetectionStatus = document.getElementById("llmDetectionStatus") as HTMLDivElement | null;
 const toast = document.getElementById("toast") as HTMLDivElement;
 const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 
@@ -158,6 +164,10 @@ let drawStartX = 0;
 let drawStartY = 0;
 let currentDrawRect: { x: number; y: number; width: number; height: number } | null = null;
 let currentSnapResult: SnapResult | null = null;
+/** 確定前の手動黒塗り。同じ行への追加ストロークはこの1件を伸ばす。 */
+let pendingManualBoxId: string | null = null;
+/** 現在の画像から検出された行の傾き角度（度）。図形の角度補正がオフのときは 0。 */
+let currentDetectedDeskewAngle = 0;
 let activeSnappedLine: import("./engine/ocr").OcrLine | null = null;
 let toastTimeout: number | null = null;
 
@@ -361,8 +371,7 @@ function handleImageFile(file: File): void {
   void (async () => {
     try {
       const img = await loadImageFromFile(file);
-      // 撮影・読み込み直後に自動4隅検出 → 虫眼鏡付き手動調整画面を起動
-      await ingestCapturedImage(img, { skipPerspective: false });
+      await ingestCapturedImage(img);
     } catch (err) {
       console.error(err);
       showToast("画像の読み込みに失敗しました");
@@ -417,11 +426,61 @@ let currentPreloadedOcr: import("./engine/ocr").OcrResult | undefined;
 let currentPreloadedAvatars: { x: number; y: number; width: number; height: number }[] | undefined;
 let lastOcrResult: import("./engine/ocr").OcrResult | null = null;
 let aiCleanedText: string | null = null;
+let cachedDeskewAngle: number | null = null;
+let analysisRevision = 0;
+let analysisRunning = false;
+let pendingAnalysisReuse: boolean | null = null;
+let guideAfterAnalysis: HTMLImageElement | null = null;
+let lastLlmAnalysis: LlmAnalysisSummary | null = null;
+let llmPreferenceRevision = 0;
+let llmModelPreparing = false;
+
+function updateLlmDetectionStatus(): void {
+  if (!llmDetectionStatus) return;
+  llmDetectionStatus.style.color = "var(--text-dim)";
+  llmDetectionStatus.title = lastLlmAnalysis?.message ?? "";
+  if (!isLlmOptInEnabled()) {
+    llmDetectionStatus.textContent = "AI文脈判定: OFF（ルール判定）";
+  } else if (llmModelPreparing) {
+    llmDetectionStatus.textContent = "AI文脈判定: モデルを準備中";
+  } else if (!appState.getState().sourceImage) {
+    llmDetectionStatus.textContent = "AI文脈判定: 画像の読み込み待ち";
+  } else if (analysisRunning) {
+    llmDetectionStatus.textContent = "AI文脈判定: 解析中";
+  } else if (!lastLlmAnalysis) {
+    llmDetectionStatus.textContent = "AI文脈判定: 未実行";
+  } else {
+    const scope = `${lastLlmAnalysis.analyzedLines}/${lastLlmAnalysis.totalLines}行`;
+    const reused = lastLlmAnalysis.cached ? "・再利用" : "";
+    const partial = lastLlmAnalysis.analyzedLines < lastLlmAnalysis.totalLines ? "・一部のみ" : "";
+    if (lastLlmAnalysis.status === "applied" || lastLlmAnalysis.status === "no_additions") {
+      llmDetectionStatus.textContent = `AI文脈判定: 確認済み・追加 ${lastLlmAnalysis.addedBoxes}件（${scope}${partial}${reused}）`;
+      llmDetectionStatus.style.color = "#34d399";
+    } else if (lastLlmAnalysis.status === "timeout" || lastLlmAnalysis.status === "failed") {
+      llmDetectionStatus.textContent = `AI文脈判定: ${lastLlmAnalysis.status === "timeout" ? "時間超過" : "実行失敗"}（ルール結果を表示）`;
+      llmDetectionStatus.style.color = "#fbbf24";
+    } else {
+      llmDetectionStatus.textContent = "AI文脈判定: 対象なし（ルール結果を表示）";
+    }
+  }
+}
 
 function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void {
   lastOcrResult = null;
   aiCleanedText = null;
+  lastLlmAnalysis = null;
+  cachedDeskewAngle = null;
+  currentDetectedDeskewAngle = 0;
+  pendingManualBoxId = null;
+  isPerspectiveMode = false;
+  perspectiveCorners = null;
+  activeCornerKey = null;
+  if (perspectiveBar) perspectiveBar.style.display = "none";
+  analysisRevision++;
+  pendingAnalysisReuse = null;
+  guideAfterAnalysis = null;
   appState.setSourceImage(img);
+  updateLlmDetectionStatus();
 }
 
 function updateRedactedBadge(mode: "rule" | "ai"): void {
@@ -439,7 +498,7 @@ function updateRedactedBadge(mode: "rule" | "ai"): void {
     redactedModeBadge.style.color = "#c084fc";
     redactedModeBadge.style.borderColor = "rgba(168, 85, 247, 0.4)";
   } else {
-    redactedModeBadge.textContent = "⚡ 高速ルール伏字";
+    redactedModeBadge.textContent = lastLlmAnalysis?.status === "applied" ? "🤖 AI判定＋ルール伏字" : "⚡ ルール伏字";
     redactedModeBadge.style.background = "rgba(59, 130, 246, 0.15)";
     redactedModeBadge.style.color = "#60a5fa";
     redactedModeBadge.style.borderColor = "rgba(59, 130, 246, 0.3)";
@@ -507,9 +566,9 @@ function refreshRedactedTextPreview(resetAi = false): void {
     aiCleanedText = null;
     updateRedactedBadge("rule");
     if (txtRedactedPreview) {
-      txtRedactedPreview.value = state.sourceImage
-        ? "テキスト抽出中、または文字が検出されませんでした。"
-        : "解析が完了すると、伏字化されたテキストがここに表示されます。";
+      txtRedactedPreview.value = state.sourceImage && lastOcrResult
+        ? "文字が検出されませんでした。"
+        : "黒塗りした部分が、ここに伏字として出ます。";
     }
     if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
     if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = true;
@@ -517,6 +576,16 @@ function refreshRedactedTextPreview(resetAi = false): void {
   }
 
   if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = false;
+
+  // 行検出だけでは原文を伏字プレビューに出さない。黒塗りが付いてから置換する。
+  if (!state.boxes.some((box) => box.enabled)) {
+    if (txtRedactedPreview) {
+      txtRedactedPreview.value = "文字行を検出しました。黒塗りした部分が、ここに伏字として出ます。";
+    }
+    if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
+    if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = true;
+    return;
+  }
 
   // AI清書テキストが既に存在する場合はそれを優先表示
   if (aiCleanedText) {
@@ -549,9 +618,7 @@ function getSafeExportRendererOptions(
   if (unsafeStyle) {
     warnings.push("モザイク・ぼかしは復元や判読の余地があるため、保存画像では不透明な黒塗りに変更します。");
   }
-  if (!lastOcrResult) {
-    warnings.push("自動検出がまだ完了していません。必要な黒塗りが揃っているか確認してください。");
-  } else if (lastOcrResult.status && lastOcrResult.status !== "ok") {
+  if (lastOcrResult && lastOcrResult.status && lastOcrResult.status !== "ok") {
     warnings.push(lastOcrResult.warnings?.[0] || "OCR結果に未確認箇所があります。黒塗り位置を確認してください。");
   }
   if (warnings.length > 0 && !confirm(`${warnings.join("\n\n")}\n\n確認のうえエクスポートしますか？`)) {
@@ -611,7 +678,6 @@ function handleImageDataUrl(
   const img = new Image();
   img.onload = () => {
     void ingestCapturedImage(img, {
-      skipPerspective: !!preloadedOcr,
       preloadedOcr,
       preloadedAvatars
     });
@@ -622,14 +688,12 @@ function handleImageDataUrl(
 let lastCorrection: CaptureCorrectionResult | null = null;
 
 /**
- * 画像取り込み時の処理パイプライン
- * 一般的なスキャンアプリの標準UX:
- * 撮影/画像選択 → 自動4隅判定 → 手動4隅調整(虫眼鏡付き)画面を表示 → 補正実行 → 黒塗り解析
+ * 画像をそのまま読み込む。
+ * 黒塗りは作らず、文字行の検出とガイドだけ自動で行う。
  */
 async function ingestCapturedImage(
   img: HTMLImageElement,
   opts: {
-    skipPerspective?: boolean;
     preloadedOcr?: import("./engine/ocr").OcrResult;
     preloadedAvatars?: { x: number; y: number; width: number; height: number }[];
   } = {}
@@ -638,25 +702,78 @@ async function ingestCapturedImage(
   currentPreloadedAvatars = opts.preloadedAvatars;
   lastCorrection = null;
 
-  // まず元画像を画面にセットしてキャンバスを表示
   setSourceImageAndInvalidateAnalysis(img);
+  appState.setMode("draw");
+  void detectLinesForManualGuides(img);
+}
 
-  // 正面チャットサンプル等で四隅補正をスキップする場合
-  if (opts.skipPerspective) {
-    await startAnalysis();
+function ocrIsUsable(result: import("./engine/ocr").OcrResult | null | undefined): result is import("./engine/ocr").OcrResult {
+  return !!result && !["failed", "timeout", "no_text"].includes(result.status ?? "ok") && result.lines.length > 0;
+}
+
+/**
+ * 手動黒塗り用に文字行だけを検出する。黒塗り枠は作らない。
+ * 検出した行はガイド表示と行スナップに使う。
+ */
+async function detectLinesForManualGuides(sourceImage: HTMLImageElement): Promise<void> {
+  if (appState.getState().sourceImage !== sourceImage) return;
+
+  if (analysisRunning) {
+    guideAfterAnalysis = sourceImage;
     return;
   }
 
-  // ★ 1. AI不使用で画像のエッジから自動で4隅を検出 ★
-  const autoCorners = detectDocumentCornersAuto(img);
+  const preloaded = currentPreloadedOcr;
+  if (ocrIsUsable(preloaded)) {
+    lastOcrResult = preloaded;
+    updateCanvasRender();
+    refreshRedactedTextPreview(true);
+    showToast(`文字行を ${preloaded.lines.length} 本検出しました。ガイドに沿ってドラッグできます`, 4000);
+    return;
+  }
 
-  // ★ 2. 撮影直後に自動で手動4隅調整モード（拡大鏡付き）を起動！ ★
-  openPerspectiveMode(autoCorners);
-  showToast("📐 画面の4隅にピンを合わせ、「✨ 補正して黒塗り実行」を押してください", 4500);
+  const revision = analysisRevision;
+  analysisRunning = true;
+  appState.setAnalyzing(true, "文字行を検出しています...", 0.06);
+  try {
+    const ocr = await runOcr(sourceImage, (progress) => {
+      if (revision !== analysisRevision || appState.getState().sourceImage !== sourceImage) return;
+      appState.setAnalyzing(true, `文字行を検出しています\n${progress.status}`, Math.max(0.06, progress.progress));
+    });
+    if (appState.getState().sourceImage !== sourceImage) return;
+    lastOcrResult = ocr;
+    updateCanvasRender();
+    refreshRedactedTextPreview(true);
+    if (revision !== analysisRevision) return;
+    if (ocr.lines.length > 0) {
+      showToast(`文字行を ${ocr.lines.length} 本検出しました。ガイドに沿ってドラッグすると黒塗りできます`, 4500);
+    } else if (ocr.status === "timeout") {
+      showToast("文字行の検出が時間内に終わりませんでした。自由な矩形で黒塗りできます", 5000);
+    } else {
+      showToast("文字行は見つかりませんでした。自由な矩形で黒塗りできます", 5000);
+    }
+  } catch (err) {
+    console.error(err);
+    if (revision === analysisRevision && appState.getState().sourceImage === sourceImage) {
+      showToast("文字行の検出に失敗しました。自由な矩形で黒塗りできます");
+    }
+  } finally {
+    analysisRunning = false;
+    const reuse = pendingAnalysisReuse;
+    pendingAnalysisReuse = null;
+    const nextGuide = guideAfterAnalysis;
+    guideAfterAnalysis = null;
+    if (reuse !== null && appState.getState().sourceImage) {
+      void startAnalysis(reuse);
+      return;
+    }
+    if (nextGuide && nextGuide === appState.getState().sourceImage) {
+      void detectLinesForManualGuides(nextGuide);
+      return;
+    }
+    appState.setAnalyzing(false);
+  }
 }
-
-// 現在の画像から検出された行の傾き角度（度）
-let currentDetectedDeskewAngle = 0;
 
 /**
  * 自動墨消し画像解析の実行
@@ -664,8 +781,18 @@ let currentDetectedDeskewAngle = 0;
 async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
   const state = appState.getState();
   if (!state.sourceImage) return;
+  const revision = ++analysisRevision;
+  if (analysisRunning) {
+    pendingAnalysisReuse = pendingAnalysisReuse === false ? false : reuseOcr;
+    return;
+  }
+  analysisRunning = true;
+  const sourceImage = state.sourceImage;
+  const filterOptions = { ...state.filterOptions, customKeywords: [...state.filterOptions.customKeywords] };
+  const llmEnabledAtStart = isLlmOptInEnabled();
 
   appState.setAnalyzing(true, "解析を準備中...", 0);
+  updateLlmDetectionStatus();
 
   try {
     // 画素を正対化済みなら、箱だけ傾けると位置がずれるので追従しない
@@ -682,27 +809,38 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
       toggleFollowSlope: toggleFollowSlope.checked
     }));
     if (toggleFollowSlope.checked && !alreadyFrontal) {
-      const detected = detectImageDeskewAngle(state.sourceImage);
+      const detected = cachedDeskewAngle ?? detectImageDeskewAngle(sourceImage);
+      cachedDeskewAngle = detected;
       console.log("[startAnalysis] Detected deskew angle for bounding boxes:", detected);
       if (Math.abs(detected) >= 0.8) {
         currentDetectedDeskewAngle = detected;
       }
     }
 
-    const reusableOcr = reuseOcr ? (lastOcrResult ?? currentPreloadedOcr) : currentPreloadedOcr;
+    const reusableOcr = currentPreloadedOcr ?? (ocrIsUsable(lastOcrResult) ? lastOcrResult : undefined);
     const result = await analyzeImageForRedaction(
-      state.sourceImage,
-      state.filterOptions,
+      sourceImage,
+      filterOptions,
       (p) => {
-        appState.setAnalyzing(true, p.status, p.progress);
+        if (revision === analysisRevision) {
+          appState.setAnalyzing(true, p.status, p.progress);
+          if (llmDetectionStatus && isLlmOptInEnabled() && /AI|Qwen3/.test(p.status)) {
+            llmDetectionStatus.textContent = `AI文脈判定: ${p.status}`;
+          }
+        }
       },
       reusableOcr,
       currentPreloadedAvatars,
       currentDetectedDeskewAngle
     );
-
+    if (sourceImage !== appState.getState().sourceImage) return;
+    // 同じ画像で後続リクエストが待機している場合も、OCRは次の解析に再利用する。
     lastOcrResult = result.ocrResult;
-    appState.setBoxes(result.boxes);
+    if (revision !== analysisRevision || llmEnabledAtStart !== isLlmOptInEnabled()) return;
+    lastLlmAnalysis = result.llmAnalysis;
+    // AIのON/OFF再解析で、ユーザーが追加した手動枠を失わない。
+    const manualBoxes = appState.getState().boxes.filter((box) => box.isManual || box.type === "manual");
+    appState.setBoxes([...result.boxes, ...manualBoxes]);
     refreshRedactedTextPreview(true);
 
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
@@ -712,13 +850,21 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
     if (ocrWarning) {
       showToast(`⚠️ ${ocrWarning}`, 6000);
     } else {
-      showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${corrNotice}${photoNotice}`);
+      const aiNotice = result.llmAnalysis.status === "applied" ? ` / AIで${result.llmAnalysis.addedBoxes}箇所追加` : "";
+      showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${aiNotice}${slopeNotice}${corrNotice}${photoNotice}`);
     }
   } catch (err) {
     console.error("Analysis failed:", err);
-    showToast("画像解析中にエラーが発生しました");
+    if (revision === analysisRevision) showToast("画像解析中にエラーが発生しました");
   } finally {
+    analysisRunning = false;
     appState.setAnalyzing(false);
+    updateLlmDetectionStatus();
+    if (pendingAnalysisReuse !== null) {
+      const reuse = pendingAnalysisReuse;
+      pendingAnalysisReuse = null;
+      void startAnalysis(reuse);
+    }
   }
 }
 
@@ -781,8 +927,8 @@ function updateCanvasRender(): void {
     false
   );
 
-  // 描画モード中の行ガイド描画（拡大率に応じて見やすさを自動調整）
-  if (state.mode === "draw" && lastOcrResult && lastOcrResult.lines.length > 0) {
+  // 検出済みの文字行ガイド。手動黒塗りの位置合わせに使う。
+  if (lastOcrResult && lastOcrResult.lines.length > 0) {
     renderLineGuides(
       ctx,
       lastOcrResult.lines,
@@ -840,8 +986,11 @@ function showBoxEditorPopover(box: RedactBox): void {
   const boxW = box.rect.width * scaleX;
   const boxH = box.rect.height * scaleY;
 
-  const popoverW = 290;
-  const popoverH = 210;
+  boxEditorPopover.style.display = "block";
+  const draftHint = document.getElementById("popoverDraftHint");
+  if (draftHint) draftHint.hidden = box.id !== pendingManualBoxId;
+  const popoverW = boxEditorPopover.offsetWidth || 290;
+  const popoverH = boxEditorPopover.offsetHeight || 260;
 
   // デフォルトはボックス上部に配置、上部に余白がなければ下部に配置
   let left = boxLeft + boxW / 2 - popoverW / 2;
@@ -857,7 +1006,6 @@ function showBoxEditorPopover(box: RedactBox): void {
 
   boxEditorPopover.style.left = `${Math.round(left)}px`;
   boxEditorPopover.style.top = `${Math.round(top)}px`;
-  boxEditorPopover.style.display = "block";
 
   // 入力欄とトグル表示の同期
   popoverCustomLabel.value = box.label || "";
@@ -877,6 +1025,69 @@ function hideBoxEditorPopover(): void {
   if (boxEditorPopover) {
     boxEditorPopover.style.display = "none";
   }
+}
+
+function currentLineSnapOptions(): { globalAngle?: number } {
+  if (!toggleFollowSlope.checked || Math.abs(currentDetectedDeskewAngle) < 0.1) return {};
+  return { globalAngle: currentDetectedDeskewAngle };
+}
+
+function rotationForManualStroke(snap: SnapResult | null): number | undefined {
+  if (!toggleFollowSlope.checked) return undefined;
+  const angle = snap?.rotation ?? currentDetectedDeskewAngle;
+  if (angle === undefined || Math.abs(angle) < 0.1) return undefined;
+  return angle;
+}
+
+/** ラベル選択・確定で黒塗りを確定し、編集モーダルを閉じる。 */
+function confirmPendingRedaction(): void {
+  pendingManualBoxId = null;
+  hideBoxEditorPopover();
+  if (appState.getState().selectedBoxId !== null) {
+    appState.setSelectedBoxId(null);
+  } else {
+    updateCanvasRender();
+  }
+}
+
+function commitManualStroke(
+  rect: { x: number; y: number; width: number; height: number },
+  snap: SnapResult | null
+): void {
+  const rotation = rotationForManualStroke(snap);
+  const pending = pendingManualBoxId
+    ? appState.getState().boxes.find((box) => box.id === pendingManualBoxId)
+    : undefined;
+
+  if (pending && rectsShareRedactionLine(pending.rect, rect)) {
+    if (appState.getState().selectedBoxId !== pending.id) {
+      appState.setSelectedBoxId(pending.id);
+    }
+    appState.updateBox(pending.id, {
+      rect: extendRectOnSameLine(pending.rect, rect),
+      rotation: toggleFollowSlope.checked ? (pending.rotation ?? rotation) : undefined
+    });
+    const updated = appState.getState().boxes.find((box) => box.id === pending.id);
+    if (updated) showBoxEditorPopover(updated);
+    showToast("同じ行の黒塗りを伸ばしました");
+    return;
+  }
+
+  const created = appState.addManualBox(rect, rotation);
+  pendingManualBoxId = created?.id ?? null;
+  if (created) showBoxEditorPopover(created);
+  showToast(snap?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
+}
+
+function finishManualStroke(): void {
+  if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
+    commitManualStroke(currentDrawRect, currentSnapResult);
+  }
+  currentDrawRect = null;
+  currentSnapResult = null;
+  activeSnappedLine = null;
+  updateCanvasRender();
+  refreshRedactedTextPreview(true);
 }
 
 /**
@@ -1147,12 +1358,12 @@ async function capturePhotoFromStream(): Promise<void> {
   ctx.drawImage(cameraVideo, 0, 0, vw, vh);
 
   closeLiveCameraModal();
-  showToast("撮影完了！四隅を確認・微調整してください", 3500);
+  showToast("撮影しました。ドラッグして黒塗りできます", 3500);
 
   const dataUrl = capCanvas.toDataURL("image/png");
   const img = new Image();
   img.onload = async () => {
-    await ingestCapturedImage(img, { skipPerspective: false });
+    await ingestCapturedImage(img);
   };
   img.src = dataUrl;
 }
@@ -1287,9 +1498,11 @@ function initEvents(): void {
   });
   toolDrawMode.addEventListener("click", () => {
     appState.setMode("draw");
-    hideBoxEditorPopover();
-    appState.setSelectedBoxId(null);
-    updateCanvasRender();
+    const selected = appState.getState().selectedBoxId;
+    if (selected !== pendingManualBoxId) {
+      hideBoxEditorPopover();
+      if (selected) appState.setSelectedBoxId(null);
+    }
   });
 
   // 墨消しスタイル切り替え (ドロップダウン)
@@ -1313,12 +1526,8 @@ function initEvents(): void {
 
         appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label})` });
         appState.setActiveDrawLabel(label);
-        updateCanvasRender();
-        refreshRedactedTextPreview(true);
         showToast(`🏷️ ラベルを「${label}」に設定しました`);
-
-        chips.forEach((c) => c.classList.toggle("active", c === chip));
-        if (popoverCustomLabel) popoverCustomLabel.value = label;
+        confirmPendingRedaction();
       });
     });
 
@@ -1331,11 +1540,8 @@ function initEvents(): void {
 
         appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
         appState.setActiveDrawLabel(val);
-        updateCanvasRender();
-        refreshRedactedTextPreview(true);
         showToast(`🏷️ ラベルを「${val}」に設定しました`);
-
-        chips.forEach((c) => c.classList.toggle("active", c.getAttribute("data-label") === val));
+        confirmPendingRedaction();
       });
     }
 
@@ -1363,11 +1569,20 @@ function initEvents(): void {
       });
     }
 
+    if (btnPopoverConfirm) {
+      btnPopoverConfirm.addEventListener("click", () => {
+        if (!appState.getState().selectedBoxId && !pendingManualBoxId) return;
+        showToast("黒塗りを確定しました");
+        confirmPendingRedaction();
+      });
+    }
+
     // 黒塗りの完全削除
     if (btnPopoverDelete) {
       btnPopoverDelete.addEventListener("click", () => {
         const state = appState.getState();
         if (!state.selectedBoxId) return;
+        if (state.selectedBoxId === pendingManualBoxId) pendingManualBoxId = null;
         appState.removeBox(state.selectedBoxId);
         hideBoxEditorPopover();
         updateCanvasRender();
@@ -1376,12 +1591,16 @@ function initEvents(): void {
       });
     }
 
-    // 閉じるボタン
+    // 閉じるボタンはモーダルだけ隠し、確定前なら同じ行への追加でまだ伸ばせる
     if (btnPopoverClose) {
       btnPopoverClose.addEventListener("click", () => {
+        const selected = appState.getState().selectedBoxId;
+        if (selected && selected === pendingManualBoxId) {
+          hideBoxEditorPopover();
+          return;
+        }
         hideBoxEditorPopover();
         appState.setSelectedBoxId(null);
-        updateCanvasRender();
       });
     }
   }
@@ -1640,7 +1859,16 @@ function initEvents(): void {
     appState.setFilterOptions({ detectPii: togglePii.checked });
   });
   toggleFollowSlope.addEventListener("change", () => {
-    startAnalysis(true);
+    if (!toggleFollowSlope.checked) {
+      currentDetectedDeskewAngle = 0;
+      const boxes = appState.getState().boxes;
+      if (boxes.some((box) => box.rotation && Math.abs(box.rotation) > 0.1)) {
+        appState.setBoxes(boxes.map((box) => ({ ...box, rotation: undefined })));
+      }
+    }
+    if (lastOcrResult && appState.getState().sourceImage) {
+      startAnalysis(true);
+    }
   });
 
   // 安全マージン（パディング）スライダー
@@ -1801,7 +2029,7 @@ function initEvents(): void {
         const agreed = confirm(
           "【🤖 AI文章清書機能】\n\n" +
           "文字化けや誤字を文脈から補正し、自然で綺麗な日本語で個人情報を伏字化します。\n\n" +
-          "※ ブラウザ内の極小AIモデル（Qwen2.5-0.5B、約350MB）を端末にダウンロードして実行します。\n" +
+          `※ ブラウザ内の極小AIモデル（${LOCAL_LLM_DISPLAY_NAME}）を端末で実行します。初回ダウンロードは${LOCAL_LLM_DOWNLOAD_LABEL}です（実行環境により異なります）。\n` +
           "※ 画像やテキストが外部サーバーへ送信されることは一切ありません（完全ローカル実行）。\n\n" +
           "ダウンロードして実行しますか？"
         );
@@ -2040,11 +2268,14 @@ function initEvents(): void {
     if (state.mode === "select") {
       const box = findBoxAtPosition(state.boxes, x, y);
       if (box) {
+        if (pendingManualBoxId && pendingManualBoxId !== box.id) pendingManualBoxId = null;
         appState.setSelectedBoxId(box.id);
         showBoxEditorPopover(box);
         updateCanvasRender();
       } else {
-        appState.setSelectedBoxId(null);
+        if (appState.getState().selectedBoxId !== pendingManualBoxId) {
+          appState.setSelectedBoxId(null);
+        }
         hideBoxEditorPopover();
         updateCanvasRender();
         // ボックス外をクリック＆ドラッグした場合はパン移動を開始
@@ -2068,7 +2299,7 @@ function initEvents(): void {
           lastOcrResult.lines,
           { x, y },
           { x, y },
-          { globalAngle: currentDetectedDeskewAngle }
+          currentLineSnapOptions()
         );
         currentSnapResult = snap;
         activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
@@ -2106,7 +2337,7 @@ function initEvents(): void {
         lastOcrResult.lines,
         { x: drawStartX, y: drawStartY },
         { x, y },
-        { globalAngle: currentDetectedDeskewAngle }
+        currentLineSnapOptions()
       );
       currentSnapResult = snap;
       activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
@@ -2143,22 +2374,7 @@ function initEvents(): void {
 
     if (!isDrawing) return;
     isDrawing = false;
-
-    if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
-      const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
-      appState.addManualBox(currentDrawRect, rot);
-      const newlyAddedBox = appState.getState().boxes[appState.getState().boxes.length - 1];
-      if (newlyAddedBox) {
-        showBoxEditorPopover(newlyAddedBox);
-      }
-      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
-    }
-
-    currentDrawRect = null;
-    currentSnapResult = null;
-    activeSnappedLine = null;
-    updateCanvasRender();
-    refreshRedactedTextPreview(true);
+    finishManualStroke();
   });
 
   // タッチ操作（スマホ対応：ピンチズーム・パン・行スナップ描画）
@@ -2212,11 +2428,14 @@ function initEvents(): void {
         const box = findBoxAtPosition(state.boxes, x, y);
         if (box) {
           e.preventDefault();
+          if (pendingManualBoxId && pendingManualBoxId !== box.id) pendingManualBoxId = null;
           appState.setSelectedBoxId(box.id);
           showBoxEditorPopover(box);
           updateCanvasRender();
         } else {
-          appState.setSelectedBoxId(null);
+          if (appState.getState().selectedBoxId !== pendingManualBoxId) {
+            appState.setSelectedBoxId(null);
+          }
           hideBoxEditorPopover();
           updateCanvasRender();
           // 何もない場所をドラッグした場合はパン移動
@@ -2240,7 +2459,7 @@ function initEvents(): void {
             lastOcrResult.lines,
             { x, y },
             { x, y },
-            { globalAngle: currentDetectedDeskewAngle }
+            currentLineSnapOptions()
           );
           currentSnapResult = snap;
           activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
@@ -2310,7 +2529,7 @@ function initEvents(): void {
         lastOcrResult.lines,
         { x: drawStartX, y: drawStartY },
         { x, y },
-        { globalAngle: currentDetectedDeskewAngle }
+        currentLineSnapOptions()
       );
       currentSnapResult = snap;
       activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
@@ -2349,22 +2568,7 @@ function initEvents(): void {
 
     if (!isDrawing) return;
     isDrawing = false;
-
-    if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
-      const rot = currentSnapResult?.rotation ?? (toggleFollowSlope.checked && currentDetectedDeskewAngle !== 0 ? currentDetectedDeskewAngle : undefined);
-      appState.addManualBox(currentDrawRect, rot);
-      const newlyAddedBox = appState.getState().boxes[appState.getState().boxes.length - 1];
-      if (newlyAddedBox) {
-        showBoxEditorPopover(newlyAddedBox);
-      }
-      showToast(currentSnapResult?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
-    }
-
-    currentDrawRect = null;
-    currentSnapResult = null;
-    activeSnappedLine = null;
-    updateCanvasRender();
-    refreshRedactedTextPreview(true);
+    finishManualStroke();
   });
 
   // モバイル専用スライドアップメニューとクイック操作の初期化
@@ -2566,6 +2770,12 @@ function initPwaAndStorageManager(): void {
   const llmProgressBar = document.getElementById("llmProgressBar") as HTMLDivElement | null;
   const llmProgressStatus = document.getElementById("llmProgressStatus") as HTMLSpanElement | null;
   const llmProgressPercent = document.getElementById("llmProgressPercent") as HTMLSpanElement | null;
+  const llmModelDescription = document.getElementById("llmModelDescription") as HTMLDivElement | null;
+
+  if (llmModelDescription) {
+    llmModelDescription.textContent = `${LOCAL_LLM_DISPLAY_NAME} / 黒塗りの文脈補完・文章清書（初回 ${LOCAL_LLM_DOWNLOAD_LABEL}）`;
+    llmModelDescription.title = "通常時のダウンロード容量の目安です。GPU初期化に失敗してCPUへ切り替わる場合は、CPU用のモデルを追加取得します。";
+  }
 
   const storageTotalBytes = document.getElementById("storageTotalBytes") as HTMLSpanElement | null;
   const statusOcrCache = document.getElementById("statusOcrCache") as HTMLSpanElement | null;
@@ -2599,29 +2809,82 @@ function initPwaAndStorageManager(): void {
       if (statusLlmCache) {
         if (stats.models.llm.isCached) {
           const llmMb = (stats.models.llm.sizeBytes / (1024 * 1024)).toFixed(0);
-          statusLlmCache.textContent = `保存済み (${llmMb} MB)`;
+          statusLlmCache.textContent = `保存済み (合計 ${llmMb} MB)`;
+          statusLlmCache.title = "Qwen3の保存を確認済みです。容量には旧モデルや他の量子化形式も含みます。";
           statusLlmCache.style.color = "#10b981";
           if (llmCachedActions) llmCachedActions.style.display = "flex";
         } else {
           statusLlmCache.textContent = "未保存";
+          statusLlmCache.title = "現在のQwen3モデルが揃っていません。残っている旧モデルや取得途中のデータは削除できます。";
           statusLlmCache.style.color = "var(--text-dim)";
-          if (llmCachedActions) llmCachedActions.style.display = "none";
+          if (llmCachedActions) llmCachedActions.style.display = stats.models.llm.sizeBytes > 0 ? "flex" : "none";
         }
       }
+      return stats;
     } catch {
       storageTotalBytes.textContent = "取得エラー";
+      return null;
     }
   };
 
-  btnDeleteLlmData?.addEventListener("click", async () => {
-    if (confirm("端末に保存されている文脈AI（極小LLM）のモデルデータ（約350MB）を削除しますか？\n（いつでも再ダウンロード・再有効化できます）")) {
-      await ModelCacheManager.clearCategory("llm");
+  const prepareLlmAndAnalyze = async (requestRevision: number) => {
+    llmModelPreparing = true;
+    updateLlmDetectionStatus();
+    if (llmProgressContainer) llmProgressContainer.style.display = "block";
+    showToast(`🤖 ${LOCAL_LLM_DISPLAY_NAME} の初期化を開始します`);
+    try {
+      const { getLocalLlmPipeline } = await import("./engine/localLlm");
+      const pipe = await getLocalLlmPipeline((status, progress) => {
+        if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
+        if (llmProgressStatus) llmProgressStatus.textContent = status;
+        if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
+        if (llmProgressBar) llmProgressBar.style.width = `${Math.round(progress * 100)}%`;
+      });
+      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
+      if (!pipe) throw new Error("Pipeline returned null");
+      llmModelPreparing = false;
+      const stats = await updateStorageStats();
+      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
+      showToast(stats?.models.llm.isCached
+        ? "✨ AI文脈判定の準備が完了しました！"
+        : "文脈AIは利用できますが、モデルを保存できませんでした。次回起動時に再取得が必要です");
+      // 初回取得が解析の時間上限を超えても、準備完了後に現在画像を判定し直す。
+      if (appState.getState().sourceImage) await startAnalysis(true);
+    } catch (err) {
+      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
+      console.warn("[StorageModal] LLM activation failed:", err);
+      llmModelPreparing = false;
       setLlmOptInEnabled(false);
       if (toggleLlm) toggleLlm.checked = false;
       updateToggleUi(false);
       updateRedactedUiByLlmOptIn();
-      showToast("🗑️ 文脈AIデータを削除し、端末容量を解放しました");
+      showToast("⚠️ 文脈AIを利用できませんでした。通常のOCR＋ルール検出は引き続き利用できます");
       await updateStorageStats();
+      if (appState.getState().sourceImage) await startAnalysis(true);
+    } finally {
+      if (requestRevision === llmPreferenceRevision) {
+        llmModelPreparing = false;
+        if (llmProgressContainer) llmProgressContainer.style.display = "none";
+        updateLlmDetectionStatus();
+      }
+    }
+  };
+
+  btnDeleteLlmData?.addEventListener("click", async () => {
+    if (confirm("端末に保存されている文章AI（極小LLM）のモデルデータを削除しますか？\n（いつでも再ダウンロード・再有効化できます）")) {
+      await ModelCacheManager.clearCategory("llm");
+      llmPreferenceRevision++;
+      setLlmOptInEnabled(false);
+      llmModelPreparing = false;
+      lastLlmAnalysis = null;
+      if (llmProgressContainer) llmProgressContainer.style.display = "none";
+      if (toggleLlm) toggleLlm.checked = false;
+      updateToggleUi(false);
+      updateRedactedUiByLlmOptIn();
+      showToast("🗑️ 文章AIデータを削除し、端末容量を解放しました");
+      await updateStorageStats();
+      if (appState.getState().sourceImage) await startAnalysis(true);
+      updateLlmDetectionStatus();
     }
   });
 
@@ -2631,51 +2894,36 @@ function initPwaAndStorageManager(): void {
 
     toggleLlm.addEventListener("change", async () => {
       const enabled = toggleLlm.checked;
+      const requestRevision = ++llmPreferenceRevision;
       setLlmOptInEnabled(enabled);
+      lastLlmAnalysis = null;
       updateToggleUi(enabled);
       updateRedactedUiByLlmOptIn();
+      updateLlmDetectionStatus();
 
       if (enabled) {
-        if (llmProgressContainer) llmProgressContainer.style.display = "block";
-        showToast("🤖 文脈理解AI（LLM）の初期化を開始します");
-        try {
-          const { getLocalLlmPipeline } = await import("./engine/localLlm");
-          const pipe = await getLocalLlmPipeline((status, progress) => {
-            if (llmProgressStatus) llmProgressStatus.textContent = status;
-            if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
-            if (llmProgressBar) llmProgressBar.style.width = `${Math.round(progress * 100)}%`;
-          });
-          if (!pipe) {
-            throw new Error("Pipeline returned null");
-          }
-          showToast("✨ 文脈理解AIの準備が完了しました！");
-          await updateStorageStats();
-        } catch (err) {
-          console.warn("[StorageModal] LLM activation failed:", err);
-          setLlmOptInEnabled(false);
-          if (toggleLlm) toggleLlm.checked = false;
-          updateToggleUi(false);
-          updateRedactedUiByLlmOptIn();
-          showToast("⚠️ 文脈AIを利用できませんでした。通常のOCR＋ルール検出は引き続き利用できます");
-          await updateStorageStats();
-        } finally {
-          if (llmProgressContainer) llmProgressContainer.style.display = "none";
-        }
+        await prepareLlmAndAnalyze(requestRevision);
       } else {
+        llmModelPreparing = false;
+        if (llmProgressContainer) llmProgressContainer.style.display = "none";
+        // OFFにした画像からAIで追加した枠を除き、手動枠を保持する。
+        if (appState.getState().sourceImage) await startAnalysis(true);
         const stats = await ModelCacheManager.getCacheStorageStats();
-        if (stats.models.llm.isCached) {
-          if (confirm("文脈理解AIをOFFにしました。\n端末に保存されているモデルデータ（約350MB）も削除して空き容量を増やしますか？")) {
+        if (requestRevision !== llmPreferenceRevision || isLlmOptInEnabled()) return;
+        if (stats.models.llm.sizeBytes > 0) {
+          if (confirm("AI文脈判定をOFFにしました。\n端末に保存されているモデルデータも削除して空き容量を増やしますか？")) {
             await ModelCacheManager.clearCategory("llm");
             showToast("🗑️ モデルデータを削除し、空き容量を解放しました");
           } else {
-            showToast("文脈理解AIを無効化しました（モデルは保持されます）");
+            showToast("AI文脈判定を無効化しました（モデルは保持されます）");
           }
         } else {
-          showToast("文脈理解AIを無効化しました");
+          showToast("AI文脈判定を無効化しました");
         }
         await updateStorageStats();
       }
     });
+    if (toggleLlm.checked) void prepareLlmAndAnalyze(llmPreferenceRevision);
   }
 
 
@@ -2706,4 +2954,5 @@ function initPwaAndStorageManager(): void {
 initEvents();
 initPwaAndStorageManager();
 updateRedactedUiByLlmOptIn();
+updateLlmDetectionStatus();
 

@@ -266,21 +266,25 @@ function gaussianBlurSeparable(
     const row = y * w;
     for (let x = 0; x < w; x++) {
       let acc = 0;
-      for (let i = -radius; i <= radius; i++) {
-        const xx = clamp(x + i, 0, w - 1);
-        acc += src[row + xx] * kernel[i + radius];
+      if (x >= radius && x < w - radius) {
+        for (let i = -radius; i <= radius; i++) {
+          acc += src[row + x + i] * kernel[i + radius];
+        }
+      } else {
+        for (let i = -radius; i <= radius; i++) {
+          acc += src[row + clamp(x + i, 0, w - 1)] * kernel[i + radius];
+        }
       }
       tmp[row + x] = acc + 0.5;
     }
   }
 
+  const rows = new Uint32Array(kernel.length);
   for (let y = 0; y < h; y++) {
+    for (let i = -radius; i <= radius; i++) rows[i + radius] = clamp(y + i, 0, h - 1) * w;
     for (let x = 0; x < w; x++) {
       let acc = 0;
-      for (let i = -radius; i <= radius; i++) {
-        const yy = clamp(y + i, 0, h - 1);
-        acc += tmp[yy * w + x] * kernel[i + radius];
-      }
+      for (let i = 0; i < kernel.length; i++) acc += tmp[rows[i] + x] * kernel[i];
       out[y * w + x] = acc + 0.5;
     }
   }
@@ -424,21 +428,32 @@ function claheGray(
   }
 
   const out = new Uint8Array(w * h);
+  // 横方向の補間座標は全行共通。除算・floor を各画素で繰り返さない。
+  const leftTiles = new Uint32Array(w);
+  const rightTiles = new Uint32Array(w);
+  const xWeights = new Float64Array(w);
+  for (let x = 0; x < w; x++) {
+    const tx = Math.min(nx - 1, x / tw);
+    leftTiles[x] = Math.floor(tx);
+    rightTiles[x] = Math.min(nx - 1, leftTiles[x] + 1);
+    xWeights[x] = tx - leftTiles[x];
+  }
   for (let y = 0; y < h; y++) {
     const ty = Math.min(ny - 1, y / th);
     const ty0 = Math.floor(ty);
     const ty1 = Math.min(ny - 1, ty0 + 1);
     const fty = ty - ty0;
+    const topOffset = ty0 * nx;
+    const bottomOffset = ty1 * nx;
     for (let x = 0; x < w; x++) {
-      const tx = Math.min(nx - 1, x / tw);
-      const tx0 = Math.floor(tx);
-      const tx1 = Math.min(nx - 1, tx0 + 1);
-      const ftx = tx - tx0;
+      const tx0 = leftTiles[x];
+      const tx1 = rightTiles[x];
+      const ftx = xWeights[x];
       const v = src[y * w + x];
-      const v00 = luts[ty0 * nx + tx0][v];
-      const v10 = luts[ty0 * nx + tx1][v];
-      const v01 = luts[ty1 * nx + tx0][v];
-      const v11 = luts[ty1 * nx + tx1][v];
+      const v00 = luts[topOffset + tx0][v];
+      const v10 = luts[topOffset + tx1][v];
+      const v01 = luts[bottomOffset + tx0][v];
+      const v11 = luts[bottomOffset + tx1][v];
       const top = v00 * (1 - ftx) + v10 * ftx;
       const bot = v01 * (1 - ftx) + v11 * ftx;
       out[y * w + x] = top * (1 - fty) + bot * fty + 0.5;
@@ -630,11 +645,12 @@ export function preprocessForOcr(
  * 常用しないことで、細い漢字の画数潰れと通常時の二重OCRコストを避ける。
  */
 export function preprocessForOcrAlternative(
-  source: HTMLImageElement | HTMLCanvasElement
+  source: HTMLImageElement | HTMLCanvasElement,
+  sourceAnalysis?: OcrSourceAnalysis
 ): OcrPreprocessResult {
   const origW = source.width;
   const origH = source.height;
-  const analysis = analyzeOcrSource(source);
+  const analysis = sourceAnalysis || analyzeOcrSource(source);
   const scale = computeScale(origW, origH, analysis);
   const w = Math.max(8, Math.round(origW * scale));
   const h = Math.max(8, Math.round(origH * scale));

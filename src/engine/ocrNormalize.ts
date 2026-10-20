@@ -47,7 +47,7 @@ const DIGIT_FOLD: Record<string, string> = {
 
 export function isCjkChar(ch: string): boolean {
   if (!ch) return false;
-  return CJK_REGEX.test(ch[0]);
+  return CJK_REGEX.test(String.fromCodePoint(ch.codePointAt(0)!));
 }
 
 export function isSpaceChar(ch: string): boolean {
@@ -87,7 +87,7 @@ export function foldDigits(text: string): string {
 export interface NormalizedOcrText {
   /** マッチング用（CJK間スペース除去・半角化済み） */
   text: string;
-  /** text[i] が元文字列の何文字目か */
+  /** text[i] に対応する元文字列の UTF-16 インデックス */
   indexMap: number[];
 }
 
@@ -100,7 +100,14 @@ export function normalizeOcrText(raw: string): NormalizedOcrText {
 
   const chars = [...raw];
   const half = chars.map(toHalfwidthChar);
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const ch of chars) {
+    offsets.push(offset);
+    offset += ch.length;
+  }
   let text = "";
+  let previousChar = "";
   const indexMap: number[] = [];
 
   for (let i = 0; i < half.length; i++) {
@@ -108,23 +115,23 @@ export function normalizeOcrText(raw: string): NormalizedOcrText {
     if (!ch) continue;
 
     if (isSpaceChar(ch)) {
-      const prev = text.length > 0 ? text[text.length - 1] : "";
-      let next = "";
-      for (let j = i + 1; j < half.length; j++) {
-        if (!isSpaceChar(half[j])) {
-          next = half[j];
-          break;
-        }
-      }
-      if (isCjkChar(prev) && isCjkChar(next)) continue;
-      if (prev === " " || prev === "") continue;
+      // 連続する空白は一度だけ走査し、長い空白列でも線形時間で処理する。
+      let nextIndex = i + 1;
+      while (nextIndex < half.length && isSpaceChar(half[nextIndex])) nextIndex++;
+      const next = half[nextIndex] || "";
+      const originalIndex = offsets[i];
+      i = nextIndex - 1;
+      if (isCjkChar(previousChar) && isCjkChar(next)) continue;
+      if (previousChar === " " || previousChar === "") continue;
       text += " ";
-      indexMap.push(i);
+      previousChar = " ";
+      indexMap.push(originalIndex);
       continue;
     }
 
     text += ch;
-    indexMap.push(i);
+    previousChar = ch;
+    for (let unit = 0; unit < ch.length; unit++) indexMap.push(offsets[i] + unit);
   }
 
   return { text, indexMap };

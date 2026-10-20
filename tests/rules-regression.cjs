@@ -16,7 +16,7 @@ require.extensions[".ts"] = function compileTypeScript(module, filename) {
 };
 
 const { detectPiiInText } = require("../src/engine/rules/piiPatterns.ts");
-const { detectPersonsInText } = require("../src/engine/rules/honorifics.ts");
+const { detectPersonsInText, isLikelyChatSender } = require("../src/engine/rules/honorifics.ts");
 const { detectCompaniesInText } = require("../src/engine/rules/companyRules.ts");
 const { detectLayoutPii } = require("../src/engine/rules/layoutRules.ts");
 const { calculateBBoxForRange, applyPadding } = require("../src/engine/redactionEngine.ts");
@@ -158,6 +158,87 @@ test("高解像度文字では安全余白を文字高に応じて確保する",
   assert(padded.y <= 96);
   assert(padded.width >= 92);
   assert(padded.height >= 68);
+});
+
+test("地名・施設・一般の見出しを人名にしない", () => {
+  for (const text of ["山口県", "清水公園", "田中工業", "小林製薬", "資料 作成", "氏名 変更", "お客様", "皆様"]) {
+    assert.deepEqual(detectPersonsInText(text), [], text);
+  }
+});
+
+test("敬称・姓名・列記した名字の検出を維持する", () => {
+  for (const text of ["山田 太郎", "山 田 太 郎", "佐々木 葵（Aoi Sasaki）", "先ほど佐藤さんから", "鈴木部長に", "山田・鈴木", "山田です"]) {
+    assert(detectPersonsInText(text).length > 0, text);
+  }
+});
+
+test("操作名を送信者名にせず、未知の名前は送信者文脈を要求する", () => {
+  for (const text of ["設定", "ホーム", "Download", "Search", "保存", "画像"]) {
+    assert.equal(isLikelyChatSender(text, true), false, text);
+  }
+  for (const text of ["勅使河原", "alice", "ken_tanaka"]) {
+    assert.equal(isLikelyChatSender(text), false, text);
+    assert.equal(isLikelyChatSender(text, true), true, text);
+  }
+});
+
+test("一般の画面名称や法人格単体を会社名にしない", () => {
+  for (const text of ["画像処理システム", "通知センター", "開発グループ", "株式会社の設立"]) {
+    assert.deepEqual(detectCompaniesInText(text), [], text);
+  }
+});
+
+test("会社名の末尾を欠かさず検出する", () => {
+  assert(detectCompaniesInText("Google LLC").some((match) => match.matchedText === "Google LLC"));
+  assert(detectCompaniesInText("トヨタ自動車株式会社").some((match) => match.matchedText === "トヨタ自動車株式会社"));
+});
+
+test("名前変更UIとファイル名を氏名として検出しない", () => {
+  for (const text of ["名前を変更してください", "Name: Settings", "File Name: document.pdf", "住所変更はこちら"]) {
+    assert.deepEqual(detectPiiInText(text), [], text);
+  }
+  assert(detectPiiInText("氏名: 勅使河原花子").some((match) => match.category === "person"));
+});
+
+test("氏名ラベルの横の操作名や電話を人名にしない", () => {
+  for (const text of ["保存", "未設定", "09012345678"]) {
+    assert.deepEqual(detectLayoutPii([line("氏名", 10, 10, 50, 30), line(text, 100, 10, 240, 30)]), [], text);
+  }
+  assert(detectLayoutPii([line("氏名", 10, 10, 50, 30), line("勅使河原花子", 100, 10, 240, 30)]).length > 0);
+});
+
+test("一般語を含む正しい名は残さず、短い名字に似た一般語を黒塗りしない", () => {
+  assert(detectPersonsInText("山田明日香").some((match) => match.matchedText === "山田明日香"));
+  assert.deepEqual(detectPersonsInText("原材料"), []);
+  for (const text of ["山田はるか", "山田のぞみ", "山田はるかさん", "山田ハルカ", "原れい様"]) {
+    assert(detectPersonsInText(text).some((match) => match.matchedText === text), text);
+  }
+});
+
+test("チャットの挨拶を人名にせず、同じ行の実名を検出する", () => {
+  for (const text of ["お疲れ様です", "ご苦労様です", "お世話様です", "おつかれさま", "ごくろうさま", "おせわさま"]) {
+    assert.deepEqual(detectPersonsInText(text), [], text);
+    const combined = `${text}。山田様に連絡しました。`;
+    const matches = detectPersonsInText(combined);
+    assert(matches.some((match) => match.matchedText === "山田様"), combined);
+    assert(matches.every((match) => match.startIndex > text.length), combined);
+  }
+});
+
+test("都道府県と会議の日付を住所として黒塗りしない", () => {
+  assert(!categories("東京都の会議は2026年10月").includes("address"));
+  assert(categories("東京都千代田区丸の内1-2-3").includes("address"));
+});
+
+test("カード番号はチェックディジットを確認し、ラベル指定の番号は保持する", () => {
+  assert(categories("4111 1111 1111 1111").includes("credit_card"));
+  assert(!categories("1234 5678 9012 3456").includes("credit_card"));
+  assert(categories("カード番号: 1234 5678 9012 3456").includes("credit_card"));
+});
+
+test("装飾のアスタリスクとラベル付きパスワードを区別する", () => {
+  assert.deepEqual(detectPiiInText("**** お知らせ ****"), []);
+  assert(categories("Password: ****").includes("password"));
 });
 
 if (!process.exitCode) {

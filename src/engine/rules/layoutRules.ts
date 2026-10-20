@@ -1,5 +1,7 @@
 import type { OcrLine } from "../ocr";
 import type { PiiMatch } from "./piiPatterns";
+import { isPlausiblePersonValue } from "./honorifics";
+import { isPlausibleAddressValue } from "./piiPatterns";
 
 export interface LayoutPiiMatch extends PiiMatch {
   line: OcrLine;
@@ -48,7 +50,8 @@ function isPlausibleValue(text: string, category: PiiMatch["category"]): boolean
     case "postal": return digits.length === 7;
     case "birth_date": return /\d{1,4}\s*[年/.\-]\s*\d{1,2}/.test(t);
     case "bank_account": return digits.length >= 3 && digits.length <= 12;
-    case "person": return t.length <= 40 && !/[：:]/.test(t);
+    case "person": return isPlausiblePersonValue(t);
+    case "address": return isPlausibleAddressValue(t);
     default: return !/^[：:]$/.test(t);
   }
 }
@@ -67,15 +70,22 @@ export function detectLayoutPii(lines: OcrLine[]): LayoutPiiMatch[] {
     if (!rule) continue;
 
     const lineH = Math.max(8, labelLine.bbox.y1 - labelLine.bbox.y0);
+    const interveningLabels = sorted.filter((line) => line !== labelLine && isAnotherLabel(line.text));
     const candidates = sorted
       .filter((candidate) => candidate !== labelLine)
       .map((candidate) => {
         const sameRow = yOverlapRatio(labelLine, candidate) >= 0.55 &&
-          candidate.bbox.x0 >= labelLine.bbox.x1 - lineH * 0.25;
+          candidate.bbox.x0 >= labelLine.bbox.x1 - lineH * 0.25 &&
+          candidate.bbox.x0 - labelLine.bbox.x1 <= Math.max(lineH * 30, (labelLine.bbox.x1 - labelLine.bbox.x0) * 12);
         const verticalGap = candidate.bbox.y0 - labelLine.bbox.y1;
         const below = verticalGap >= -lineH * 0.15 && verticalGap <= lineH * 2.2 &&
           Math.abs(candidate.bbox.x0 - labelLine.bbox.x0) <= Math.max(64, labelLine.bbox.x1 - labelLine.bbox.x0);
         if (!sameRow && !below) return null;
+        const crossesLabel = interveningLabels.some((other) => sameRow
+          ? yOverlapRatio(labelLine, other) >= 0.55 && other.bbox.x0 > labelLine.bbox.x1 && other.bbox.x0 < candidate.bbox.x0
+          : other.bbox.y0 > labelLine.bbox.y1 && other.bbox.y0 < candidate.bbox.y0 &&
+            Math.abs(other.bbox.x0 - labelLine.bbox.x0) <= lineH * 2);
+        if (crossesLabel) return null;
         if (!isPlausibleValue(candidate.text, rule.category)) return null;
         const distance = sameRow
           ? Math.max(0, candidate.bbox.x0 - labelLine.bbox.x1)
@@ -109,7 +119,8 @@ export function detectLayoutPii(lines: OcrLine[]): LayoutPiiMatch[] {
         const gap = continuation.bbox.y0 - previous.bbox.y1;
         const aligned = Math.abs(continuation.bbox.x0 - best.bbox.x0) <= lineH * 1.5;
         if (gap < -lineH * 0.1 || gap > lineH * 1.25 || !aligned) continue;
-        if (continuation.text.trim().length < 2 || isAnotherLabel(continuation.text)) continue;
+        if (isAnotherLabel(continuation.text)) break;
+        if (!isPlausibleAddressValue(continuation.text)) continue;
         const continuedValue = continuation.text.trim();
         const continuedStart = continuation.text.indexOf(continuedValue);
         results.push({

@@ -90,7 +90,8 @@ export function generateRedactedText(
     const originalText = line.text;
     if (!originalText || originalText.trim().length === 0) continue;
 
-    const chars = [...originalText];
+    // 文字列検索の範囲と alignedSymbols は UTF-16 インデックスを使う。
+    const chars = originalText.split("");
     const nChars = chars.length;
     if (nChars === 0) continue;
 
@@ -180,6 +181,13 @@ export function generateRedactedText(
       }
     }
 
+    // 矩形が文字の片側だけに掛かった場合も、サロゲートペアを分断しない。
+    for (let index = 0; index < nChars; index++) {
+      if ((originalText.codePointAt(index) ?? 0) <= 0xffff) continue;
+      const covered = coverage[index] || coverage[index + 1];
+      if (covered) coverage[index] = coverage[index + 1] = covered;
+      index++;
+    }
 
     // 連続する伏字区間をスパン置換して行テキストを再構築
     let lineResult = "";

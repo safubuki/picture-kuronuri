@@ -4,7 +4,43 @@
  * 端末ストレージからミリ秒単位で高速復元する。
  */
 
+import { LOCAL_LLM_DTYPES, LOCAL_LLM_MODEL_ID } from './localLlmConfig';
+
 const CACHE_NAME = 'kuronuri-models-cache-v1';
+const REQUIRED_LLM_FILES = ['config.json', 'tokenizer.json', 'tokenizer_config.json'];
+const LLM_WEIGHT_FILES = LOCAL_LLM_DTYPES.map((dtype) => `onnx/model_${dtype}.onnx`);
+// 配布されている Qwen3 重みは 500 MB 以上。エラーページや小さな途中ファイルを除外する。
+const MIN_LLM_WEIGHT_BYTES = 100 * 1024 * 1024;
+
+function getCurrentLlmFile(url: string): { revision: string; file: string } | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'huggingface.co' && parsed.hostname !== 'hf.co') return null;
+    const prefix = `/${LOCAL_LLM_MODEL_ID}/resolve/`;
+    const path = decodeURIComponent(parsed.pathname);
+    if (!path.startsWith(prefix)) return null;
+    const suffix = path.slice(prefix.length);
+    const separator = suffix.indexOf('/');
+    if (separator <= 0) return null;
+    return { revision: suffix.slice(0, separator), file: suffix.slice(separator + 1) };
+  } catch {
+    return null;
+  }
+}
+
+function getModelCategory(url: string): 'ocr' | 'ner' | 'llm' | null {
+  if (getCurrentLlmFile(url)) return 'llm';
+  try {
+    const path = decodeURIComponent(new URL(url).pathname).toLowerCase();
+    // 移行前の Qwen2.5 も容量集計・ユーザーが指定する LLM 削除の対象に残す。
+    if (path.includes('qwen') || path.includes('llm') || path.includes('0.5b')) return 'llm';
+    if (path.includes('ner') || path.includes('bert')) return 'ner';
+    if (path.includes('tesseract') || path.includes('jpn') || path.includes('ocr')) return 'ocr';
+  } catch {
+    // URL として解釈できないキーはモデル判定に使用しない。
+  }
+  return null;
+}
 
 export interface ModelCacheItem {
   id: string;
@@ -189,69 +225,66 @@ export class ModelCacheManager {
       let llmBytes = 0;
       let hasNer = false;
       let hasOcr = false;
-      let hasLlm = false;
+      let itemsCount = 0;
+      const currentLlmFiles = new Map<string, Set<string>>();
 
-      for (const req of requests) {
-        const res = await cache.match(req);
-        if (res) {
+      const collectStats = async (modelCache: Cache, keys: readonly Request[]) => {
+        for (const req of keys) {
+          const res = await modelCache.match(req);
+          if (!res) continue;
           const lenStr = res.headers.get('content-length');
-          let size = lenStr ? parseInt(lenStr, 10) : 0;
-          if (!size) {
-            // ヘッダーに無ければ blob サイズで取得
-            const blob = await res.clone().blob();
-            size = blob.size;
+          let size = lenStr ? Number(lenStr) : 0;
+          if (!Number.isFinite(size) || size <= 0) {
+            // ヘッダーが無い場合のみ本体を読み、大容量の重みを重複展開しない。
+            size = (await res.clone().blob()).size;
           }
           totalBytes += size;
+          itemsCount++;
 
-          const url = req.url.toLowerCase();
-          if (url.includes('ner') || url.includes('bert')) {
+          const category = getModelCategory(req.url);
+          if (category === 'ner') {
             hasNer = true;
             nerBytes += size;
-          } else if (url.includes('tesseract') || url.includes('jpn') || url.includes('ocr')) {
+          } else if (category === 'ocr') {
             hasOcr = true;
             ocrBytes += size;
-          } else if (url.includes('qwen') || url.includes('llm')) {
-            hasLlm = true;
+          } else if (category === 'llm') {
             llmBytes += size;
           }
-        }
-      }
 
-      // transformers-cache も合算・確認
+          const currentFile = getCurrentLlmFile(req.url);
+          if (!currentFile || res.status !== 200 || res.headers.has('content-range') || size <= 0) continue;
+          if (LLM_WEIGHT_FILES.includes(currentFile.file) && size < MIN_LLM_WEIGHT_BYTES) continue;
+          let files = currentLlmFiles.get(currentFile.revision);
+          if (!files) {
+            files = new Set<string>();
+            currentLlmFiles.set(currentFile.revision, files);
+          }
+          files.add(currentFile.file);
+        }
+      };
+
+      await collectStats(cache, requests);
+
+      // transformers-cache も合算し、移行先モデルの必須ファイルを確認する。
       if ('caches' in window) {
         try {
           const tfCache = await caches.open('transformers-cache');
           if (tfCache) {
-            const tfKeys = await tfCache.keys();
-            for (const req of tfKeys) {
-              const res = await tfCache.match(req);
-              if (res) {
-                const lenStr = res.headers.get('content-length');
-                let size = lenStr ? parseInt(lenStr, 10) : 0;
-                if (!size) {
-                  const blob = await res.clone().blob();
-                  size = blob.size;
-                }
-                totalBytes += size;
-                const url = req.url.toLowerCase();
-                if (url.includes('qwen') || url.includes('0.5b')) {
-                  hasLlm = true;
-                  llmBytes += size;
-                } else if (url.includes('ner') || url.includes('bert')) {
-                  hasNer = true;
-                  nerBytes += size;
-                }
-              }
-            }
+            await collectStats(tfCache, await tfCache.keys());
           }
         } catch {
           // ignore
         }
       }
 
+      const hasLlm = [...currentLlmFiles.values()].some((files) =>
+        REQUIRED_LLM_FILES.every((file) => files.has(file)) && LLM_WEIGHT_FILES.some((file) => files.has(file))
+      );
+
       return {
         totalBytes,
-        itemsCount: requests.length,
+        itemsCount,
         models: {
           ner: { isCached: hasNer, sizeBytes: nerBytes },
           ocr: { isCached: hasOcr, sizeBytes: ocrBytes },
@@ -300,13 +333,7 @@ export class ModelCacheManager {
           const cache = await caches.open(cName);
           const requests = await cache.keys();
           for (const req of requests) {
-            const url = req.url.toLowerCase();
-            let match = false;
-            if (category === 'ner' && (url.includes('ner') || url.includes('bert'))) match = true;
-            if (category === 'ocr' && (url.includes('tesseract') || url.includes('jpn') || url.includes('ocr'))) match = true;
-            if (category === 'llm' && (url.includes('qwen') || url.includes('llm') || url.includes('0.5b'))) match = true;
-
-            if (match) {
+            if (getModelCategory(req.url) === category) {
               await cache.delete(req);
               deleted++;
             }

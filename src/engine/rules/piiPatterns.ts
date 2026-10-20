@@ -1,3 +1,5 @@
+import { isPlausiblePersonValue } from "./honorifics";
+
 /**
  * 個人特定可能情報 (PII) 精密正規表現ルール
  * ラベル（TEL:, Email:, 住所: 等）を巻き込まず、値そのものだけを正確に検出する
@@ -35,6 +37,17 @@ export const PREFECTURES = [
 ];
 
 const PREF_PATTERN = PREFECTURES.join("|");
+const PREF_REGEX = new RegExp(PREF_PATTERN, "u");
+
+/** 項目ラベルの値でも、操作名・説明文や純粋な電話番号を住所と扱わない。 */
+export function isPlausibleAddressValue(text: string): boolean {
+  const value = normalizeWidthPreservingLength(text).trim();
+  if (value.length < 2 || value.length > 100 ||
+      /^(?:未設定|未登録|未入力|不明|なし|無し|入力|変更|登録|設定|保存|編集|削除|検索|確認|選択|こちら|任意|必須)/u.test(value) ||
+      /(?:してください|できます|こちら|について)/u.test(value)) return false;
+  if (PREF_REGEX.test(value) || /[市区町村郡]|ビル|マンション|号室|丁目|番地/u.test(value)) return true;
+  return /\d/u.test(value) && /[A-Za-z\p{Script=Han}\p{Script=Katakana}]/u.test(value);
+}
 
 /**
  * 全角ASCIIだけを半角へ寄せる。1文字→1文字の変換に限定することで、
@@ -88,15 +101,40 @@ function isValidMyNumber(value: string): boolean {
   return check === Number(digits[11]);
 }
 
+function isValidCardNumber(value: string): boolean {
+  const digits = digitsOnly(value);
+  if (!/^\d{16}$/.test(digits) || /^(\d)\1+$/.test(digits)) return false;
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let digit = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+
+function hasAddressStructure(value: string, requireBlockNumber: boolean): boolean {
+  const firstDigit = value.search(/[0-9０-９]/);
+  if (firstDigit < 0) return false;
+  const place = value.slice(0, firstDigit);
+  if (!/[市区町村郡]/u.test(place) || /(?:会議|会見|開催|資料|価格|販売|件数|更新|変更|確認|について|から|より)/u.test(place)) return false;
+  const numberPart = value.slice(firstDigit);
+  if (/^[0-9０-９]{4}年/u.test(numberPart)) return false;
+  return !requireBlockNumber || /[0-9０-９]\s*(?:[-ー－丁目番地号])/u.test(numberPart);
+}
+
 /**
  * 重複や隣接する同カテゴリの検出結果を賢く結合・重複排除する
  */
 function pushOrMerge(results: PiiMatch[], item: PiiMatch, fullText?: string): void {
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
-    // 同じカテゴリで、重なっているか隣接している（隙間が2文字以内）場合は結合
+    // 実際に重なる範囲だけを結合する。隣接する別項目のラベルや区切りを巻き込まない。
     if (r.category === item.category) {
-      const overlapOrClose = !(item.endIndex < r.startIndex - 2 || item.startIndex > r.endIndex + 2);
+      const overlapOrClose = item.startIndex < r.endIndex && item.endIndex > r.startIndex;
       if (overlapOrClose) {
         r.startIndex = Math.min(r.startIndex, item.startIndex);
         r.endIndex = Math.max(r.endIndex, item.endIndex);
@@ -141,7 +179,7 @@ function detectLabeledValues(text: string): PiiMatch[] {
     // 郵便番号
     { re: /(?:郵便番号|〒)\s*[:：\s]?\s*(\d{3}\s*[-ー−–‐]?\s*\d{4})/giu, category: "postal", label: "郵便番号" },
     // 住所（建物名・部屋番号まで）
-    { re: /(?:住所|Address)\s*[:：\s]?\s*([^、。\n\r]{4,80})/giu, category: "address", label: "住所" },
+    { re: /(?:住所|Address)\s*[:：\s]\s*([^、。\n\r]{4,80})/giu, category: "address", label: "住所" },
     // パスワード（マスク文字や平文）
     { re: /(?:パスワード|Password|PW)\s*[:：\s]\s*([^\n\r]{2,80})/giu, category: "password", label: "パスワード" },
     // クレジットカード / お支払い
@@ -168,6 +206,12 @@ function detectLabeledValues(text: string): PiiMatch[] {
       if (!m[1]) continue;
       const value = trimLabeledValue(m[1]);
       if (value.length < 2) continue;
+      if (rule.category === "person") {
+        const preceding = normalizedText.slice(0, m.index).trimEnd();
+        if (/(?:ファイル|フォルダ|プロジェクト|商品|会社|企業|サービス|製品|表示|File|Folder|Project|Product|Company|Display)\s*$/iu.test(preceding) ||
+            !isPlausiblePersonValue(value)) continue;
+      }
+      if (rule.category === "address" && !isPlausibleAddressValue(value)) continue;
       const startIndex = normalizedText.indexOf(m[1], m.index);
       if (startIndex < 0) continue;
       pushOrMerge(results, {
@@ -234,6 +278,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
     "gu"
   );
   while ((match = prefAddressRegex.exec(text)) !== null) {
+    if (!hasAddressStructure(match[0], false)) continue;
     pushOrMerge(results, {
       matchedText: match[0].trim(),
       startIndex: match.index,
@@ -247,6 +292,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
   const cityAddressRegex = /([^\n\r0-9０-９、。！？\s]{1,12}(?:[市区町村郡])[^\n\r0-9０-９、。！？\s]{1,15}[0-9０-９ー丁目番地号\-\s]+(?:[\s　]*[^\n\r0-9０-９、。！？\s]{1,15}[0-9０-９]+(?:号室?)?)?)/gu;
   while ((match = cityAddressRegex.exec(text)) !== null) {
     const raw = match[0].trim();
+    if (!hasAddressStructure(raw, true)) continue;
     pushOrMerge(
       results,
       {
@@ -261,14 +307,14 @@ export function detectPiiInText(text: string): PiiMatch[] {
   }
 
   // 5. マスク済みパスワード表記。ラベル付き平文は detectLabeledValues で値だけを検出済み。
-  const pwRegex = /[●•*]{4,24}/g;
+  const pwRegex = /(?:パスワード|Password|PW)\s*[:：]?\s*([●•*]{4,24})/gi;
   while ((match = pwRegex.exec(text)) !== null) {
     pushOrMerge(
       results,
       {
-        matchedText: match[0],
-        startIndex: match.index,
-        endIndex: match.index + match[0].length,
+        matchedText: match[1],
+        startIndex: match.index + match[0].indexOf(match[1]),
+        endIndex: match.index + match[0].indexOf(match[1]) + match[1].length,
         category: "password",
         label: "パスワード"
       },
@@ -279,6 +325,7 @@ export function detectPiiInText(text: string): PiiMatch[] {
   // 6. クレジットカード（下4桁、有効期限）
   const cardDigitsRegex = /(?:下[0-9０-９]桁\s*[:：]?\s*[0-9]{4}|有効期限\s*[:：]?\s*[0-9]{2}\/[0-9]{2}|\b(?:\d{4}[-\s]?){3}\d{4}\b)/gi;
   while ((match = cardDigitsRegex.exec(normalizedText)) !== null) {
+    if (/^\d/u.test(match[0]) && !isValidCardNumber(match[0])) continue;
     pushOrMerge(
       results,
       {

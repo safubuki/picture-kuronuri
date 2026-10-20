@@ -123,24 +123,35 @@ export function snapBoxesToInk(
   const w = source.width;
   const h = source.height;
   if (w < 8 || h < 8 || boxes.length === 0) return;
+  const textBoxes = boxes.filter((box) => !box.isManual && box.type !== "face" && box.type !== "avatar" &&
+    box.rect.width >= 4 && box.rect.height >= 4);
+  if (textBoxes.length === 0) return;
+  // 文字候補の周辺だけ読み取る。顔のみの画像や広い余白を全画素走査しない。
+  const left = Math.max(0, Math.floor(Math.min(...textBoxes.map((b) => b.rect.x)) - 1));
+  const top = Math.max(0, Math.floor(Math.min(...textBoxes.map((b) => b.rect.y)) - 4));
+  const right = Math.min(w, Math.ceil(Math.max(...textBoxes.map((b) => b.rect.x + b.rect.width)) + 2));
+  const bottom = Math.min(h, Math.ceil(Math.max(...textBoxes.map((b) => b.rect.y + b.rect.height)) + 5));
+  const cropWidth = right - left;
+  const cropHeight = bottom - top;
+  if (cropWidth <= 0 || cropHeight <= 0) return;
 
   const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
-  ctx.drawImage(source, 0, 0);
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const gray = new Uint8Array(w * h);
+  ctx.drawImage(source, left, top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  const data = ctx.getImageData(0, 0, cropWidth, cropHeight).data;
+  const gray = new Uint8Array(cropWidth * cropHeight);
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
     gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] + 0.5;
   }
 
-  for (const box of boxes) {
-    // 顔写真やチャットアバターは文字ではないので絶対にスナップしない！
-    if (box.isManual || box.type === "face" || box.type === "avatar") continue;
-    const fitted = fitWindowToInk(gray, w, h, box.rect);
+  for (const box of textBoxes) {
+    const fitted = fitWindowToInk(gray, cropWidth, cropHeight, { ...box.rect, x: box.rect.x - left, y: box.rect.y - top });
     if (!fitted) continue;
+    fitted.x += left;
+    fitted.y += top;
     // インク位置へ合わせた後で、ユーザー指定の安全余白を必ず再適用する。
     const padX = Math.max(2, requestedPadding + 1, Math.min(10, Math.ceil(fitted.height * (expandForPhoto ? 0.1 : 0.07))));
     const padY = Math.max(Math.round(requestedPadding * 0.4), Math.min(6, Math.ceil(fitted.height * (expandForPhoto ? 0.07 : 0.04))));

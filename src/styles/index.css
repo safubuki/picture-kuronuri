@@ -531,6 +531,22 @@ body::before {
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 
+.popover-draft-hint {
+  margin: 0 0 0.45rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: #93c5fd;
+}
+
+.popover-draft-hint[hidden] {
+  display: none;
+}
+
+.popover-confirm-btn {
+  margin-bottom: 0.45rem;
+  font-weight: 700;
+}
+
 .popover-actions {
   display: flex;
   align-items: center;

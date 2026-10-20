@@ -30,7 +30,7 @@ export const initialState: AppState = {
   historyIndex: -1,
   filterOptions: { ...DEFAULT_FILTER_OPTIONS },
   rendererOptions: { ...DEFAULT_RENDERER_OPTIONS },
-  mode: "select",
+  mode: "draw",
   isAnalyzing: false,
   progressText: "",
   progressPercent: 0,
@@ -133,9 +133,9 @@ export class StateManager {
   public addManualBox(
     rect: { x: number; y: number; width: number; height: number },
     rotation?: number
-  ): void {
+  ): RedactBox | null {
     // 最小サイズチェック
-    if (rect.width < 5 || rect.height < 5) return;
+    if (rect.width < 5 || rect.height < 5) return null;
 
     const label = this.state.activeDrawLabel || "手動";
     const newBox: RedactBox = {
@@ -154,6 +154,7 @@ export class StateManager {
     this.state.selectedBoxId = newBox.id;
     this.pushHistory(nextBoxes);
     this.notify();
+    return newBox;
   }
 
   public removeBox(boxId: string): void {

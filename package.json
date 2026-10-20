@@ -7,6 +7,12 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:rules": "node tests/rules-regression.cjs",
+    "test:ocr": "node tests/ocr-regression.cjs",
+    "test:faces": "node tests/face-avatar-regression.cjs",
+    "test:redaction": "node tests/redaction-regression.cjs",
+    "test:llm": "node tests/local-llm-regression.cjs && node tests/model-cache-regression.cjs",
+    "test:manual": "node tests/manual-stroke-regression.cjs",
+    "test": "npm run test:rules && npm run test:ocr && npm run test:faces && npm run test:redaction && npm run test:llm && npm run test:manual",
     "preview": "vite preview"
   },
   "devDependencies": {

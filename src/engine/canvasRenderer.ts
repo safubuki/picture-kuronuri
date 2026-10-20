@@ -211,8 +211,8 @@ function renderInlineBoxLabel(
   ctx.rect(x, y, bw, bh);
   ctx.clip();
 
-  // 枠の高さに合わせた適切なフォントサイズを計算（最小9px、最大13px）
-  const fontSize = Math.max(9, Math.min(13, Math.floor(bh * 0.62)));
+  // 枠の高さに合わせたフォントサイズ（黒塗りバーの中で読める大きさ）
+  const fontSize = Math.max(12, Math.min(18, Math.floor(bh * 0.78)));
   ctx.font = `600 ${fontSize}px sans-serif`;
 
   const label = getCompactLabel(box.type, box.label);

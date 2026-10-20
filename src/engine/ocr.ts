@@ -1,6 +1,6 @@
 import { createWorker, PSM, type Worker } from "tesseract.js";
 import { preprocessForOcr, preprocessForOcrAlternative, type OcrSourceAnalysis } from "./ocrPreprocess";
-import { isCjkChar, isSpaceChar, toHalfwidthChar } from "./ocrNormalize";
+import { isCjkChar, isSpaceChar, normalizeOcrText, toHalfwidthChar } from "./ocrNormalize";
 
 export interface OcrProgress {
   status: string;
@@ -127,15 +127,15 @@ export async function getOcrWorker(
  */
 export function cleanJapaneseOcrText(text: string): string {
   if (!text) return "";
-  // 複数回適用して連続するCJK文字間スペースをすべて除去（英単語間のスペースは保持）
-  let cleaned = text;
-  for (let i = 0; i < 3; i++) {
-    cleaned = cleaned.replace(
-      /([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu,
-      "$1$2"
-    );
-  }
-  return cleaned;
+  // 後続文字を消費しない先読みで、連続する CJK 間の空白を一度に除去する。
+  return text.replace(
+    /([\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])\s+(?=[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF])/gu,
+    "$1"
+  );
+}
+
+function isJapaneseSpacingChar(ch: string): boolean {
+  return isCjkChar(ch) || /[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF]/u.test(ch);
 }
 
 interface BBox {
@@ -185,7 +185,7 @@ function buildAlignedLine(
   symbols: OcrChar[],
   confidence: number
 ): OcrLine {
-  let units: OcrChar[] = [];
+  const units: OcrChar[] = [];
   if (symbols.length > 0) {
     for (const s of symbols) {
       const chars = [...(s.text || "")].map(toHalfwidthChar);
@@ -213,38 +213,39 @@ function buildAlignedLine(
     }
   } else {
     for (const word of words) {
-      units = units.concat(explodeSymbolsFromWord(word));
+      units.push(...explodeSymbolsFromWord(word));
     }
   }
 
   let text = "";
+  let previousChar = "";
   const aligned: OcrChar[] = [];
   for (let i = 0; i < units.length; i++) {
     const ch = toHalfwidthChar(units[i].text || "");
     if (!ch) continue;
 
     if (isSpaceChar(ch)) {
-      const prev = text.length > 0 ? text[text.length - 1] : "";
-      let next = "";
-      for (let j = i + 1; j < units.length; j++) {
-        const nch = toHalfwidthChar(units[j].text || "");
-        if (nch && !isSpaceChar(nch)) {
-          next = nch;
-          break;
-        }
-      }
-      if (isCjkChar(prev) && isCjkChar(next)) continue;
-      if (prev === " " || prev === "") continue;
+      let nextIndex = i + 1;
+      while (nextIndex < units.length && (!units[nextIndex].text || isSpaceChar(units[nextIndex].text))) nextIndex++;
+      const next = units[nextIndex]?.text || "";
+      const space = units[i];
+      i = nextIndex - 1;
+      if (isJapaneseSpacingChar(previousChar) && isJapaneseSpacingChar(next)) continue;
+      if (previousChar === " " || previousChar === "") continue;
       text += " ";
-      aligned.push({ ...units[i], text: " " });
+      previousChar = " ";
+      aligned.push({ ...space, text: " " });
       continue;
     }
 
     text += ch;
-    aligned.push({ ...units[i], text: ch });
+    previousChar = ch;
+    // String.indexOf / slice と同じ UTF-16 単位で位置を保持する。
+    // 絵文字・拡張漢字のサロゲートペアには実文字の同じ矩形を対応させる。
+    for (let unit = 0; unit < ch.length; unit++) aligned.push({ ...units[i], text: ch[unit] });
   }
 
-  const fallbackText = text || rawText.trim();
+  const fallbackText = text || cleanJapaneseOcrText(normalizeOcrText(rawText.trim()).text);
 
   // text と alignedSymbols の長さを 1:1 に厳格同期（ズレを完全排除）
   if (fallbackText.length > 0 && aligned.length !== fallbackText.length) {
@@ -366,13 +367,20 @@ function parseRecognizeData(data: {
 function scaleOcrGeometry(lines: OcrLine[], symbols: OcrChar[], scale: number): void {
   if (Math.abs(scale - 1) < 0.001) return;
   const inv = 1 / scale;
+  const scaled = new Set<OcrChar>();
+  const scaleSymbol = (s: OcrChar) => {
+    // line.symbols と全体の symbols は同じオブジェクトを共有する。
+    if (scaled.has(s)) return;
+    scaled.add(s);
+    s.bbox = scaleBBox(s.bbox, inv);
+  };
   for (const line of lines) {
     line.bbox = scaleBBox(line.bbox, inv);
     for (const w of line.words) w.bbox = scaleBBox(w.bbox, inv);
-    for (const s of line.symbols) s.bbox = scaleBBox(s.bbox, inv);
-    for (const s of line.alignedSymbols) s.bbox = scaleBBox(s.bbox, inv);
+    for (const s of line.symbols) scaleSymbol(s);
+    for (const s of line.alignedSymbols) scaleSymbol(s);
   }
-  for (const s of symbols) s.bbox = scaleBBox(s.bbox, inv);
+  for (const s of symbols) scaleSymbol(s);
 }
 
 function yOverlapRatio(a: BBox, b: BBox): number {
@@ -425,8 +433,9 @@ function mergeFragmentedLines(lines: OcrLine[]): OcrLine[] {
         const left = acc.bbox.x0 <= other.bbox.x0 ? acc : other;
         const right = left === acc ? other : acc;
         const joinGap = right.bbox.x0 - left.bbox.x1;
-        const leftEnd = left.text[left.text.length - 1] || "";
-        const rightStart = right.text[0] || "";
+        const lastUnit = left.text.charCodeAt(left.text.length - 1);
+        const leftEnd = left.text.slice(lastUnit >= 0xdc00 && lastUnit <= 0xdfff ? -2 : -1);
+        const rightStart = right.text ? String.fromCodePoint(right.text.codePointAt(0)!) : "";
         const insertSpace =
           joinGap > maxH * 0.35 && !isCjkChar(leftEnd) && !isCjkChar(rightStart);
 
@@ -538,7 +547,7 @@ export async function runOcr(
     if (shouldRetry) {
       onProgress?.({ status: "低信頼領域を別方式で再確認中...", progress: 0.78 });
       try {
-        const alternative = preprocessForOcrAlternative(imageSource);
+        const alternative = preprocessForOcrAlternative(imageSource, analysis);
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.SPARSE_TEXT,
           preserve_interword_spaces: "0"
@@ -592,7 +601,19 @@ export async function runOcr(
     const merged = mergeFragmentedLines(parsed.lines);
 
     for (const line of merged) {
-      line.text = cleanJapaneseOcrText(line.text);
+      const cleaned = cleanJapaneseOcrText(line.text);
+      if (cleaned !== line.text) {
+        // 空白の削除後も、文字列と矩形の対応を崩さない。
+        const aligned: OcrChar[] = [];
+        let sourceIndex = 0;
+        for (let index = 0; index < cleaned.length; index++) {
+          while (sourceIndex < line.text.length && line.text[sourceIndex] !== cleaned[index]) sourceIndex++;
+          aligned.push(line.alignedSymbols[sourceIndex]);
+          sourceIndex++;
+        }
+        line.alignedSymbols = aligned;
+        line.text = cleaned;
+      }
       line.rawText = cleanJapaneseOcrText(line.rawText);
     }
     const cleanFull = cleanJapaneseOcrText(parsed.fullText || merged.map((l) => l.text).join("\n"));
