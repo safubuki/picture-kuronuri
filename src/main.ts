@@ -987,25 +987,39 @@ function showBoxEditorPopover(box: RedactBox): void {
   const boxH = box.rect.height * scaleY;
 
   boxEditorPopover.style.display = "block";
+  canvasViewport.classList.add("editor-open");
   const draftHint = document.getElementById("popoverDraftHint");
   if (draftHint) draftHint.hidden = box.id !== pendingManualBoxId;
-  const popoverW = boxEditorPopover.offsetWidth || 290;
-  const popoverH = boxEditorPopover.offsetHeight || 260;
 
-  // デフォルトはボックス上部に配置、上部に余白がなければ下部に配置
-  let left = boxLeft + boxW / 2 - popoverW / 2;
-  let top = boxTop - popoverH - 12;
+  // 狭い画面では編集パネルを下端に固定し、上の画像を見えるようにする
+  if (window.matchMedia("(max-width: 768px)").matches) {
+    boxEditorPopover.classList.add("is-docked");
+    boxEditorPopover.style.left = "";
+    boxEditorPopover.style.top = "";
+    boxEditorPopover.style.right = "";
+    boxEditorPopover.style.bottom = "";
+  } else {
+    boxEditorPopover.classList.remove("is-docked");
+    const popoverW = boxEditorPopover.offsetWidth || 290;
+    const popoverH = boxEditorPopover.offsetHeight || 260;
 
-  if (top < 12) {
-    top = boxTop + boxH + 12;
+    // デフォルトはボックス上部に配置、上部に余白がなければ下部に配置
+    let left = boxLeft + boxW / 2 - popoverW / 2;
+    let top = boxTop - popoverH - 12;
+
+    if (top < 12) {
+      top = boxTop + boxH + 12;
+    }
+
+    // 画面枠内に収まるよう制限
+    left = Math.max(12, Math.min(vRect.width - popoverW - 12, left));
+    top = Math.max(12, Math.min(vRect.height - popoverH - 12, top));
+
+    boxEditorPopover.style.left = `${Math.round(left)}px`;
+    boxEditorPopover.style.top = `${Math.round(top)}px`;
+    boxEditorPopover.style.right = "";
+    boxEditorPopover.style.bottom = "";
   }
-
-  // 画面枠内に収まるよう制限
-  left = Math.max(12, Math.min(vRect.width - popoverW - 12, left));
-  top = Math.max(12, Math.min(vRect.height - popoverH - 12, top));
-
-  boxEditorPopover.style.left = `${Math.round(left)}px`;
-  boxEditorPopover.style.top = `${Math.round(top)}px`;
 
   // 入力欄とトグル表示の同期
   popoverCustomLabel.value = box.label || "";
@@ -1024,7 +1038,9 @@ function showBoxEditorPopover(box: RedactBox): void {
 function hideBoxEditorPopover(): void {
   if (boxEditorPopover) {
     boxEditorPopover.style.display = "none";
+    boxEditorPopover.classList.remove("is-docked");
   }
+  canvasViewport?.classList.remove("editor-open");
 }
 
 function currentLineSnapOptions(): { globalAngle?: number } {
@@ -1111,8 +1127,12 @@ function syncUiWithState(state: AppState): void {
   }
 
   // ツールバーボタンのアクティブ状態
-  toolSelectMode.classList.toggle("active", state.mode === "select");
-  toolDrawMode.classList.toggle("active", state.mode === "draw");
+  const selectOn = state.mode === "select";
+  const drawOn = state.mode === "draw";
+  toolSelectMode.classList.toggle("active", selectOn);
+  toolDrawMode.classList.toggle("active", drawOn);
+  toolSelectMode.setAttribute("aria-pressed", selectOn ? "true" : "false");
+  toolDrawMode.setAttribute("aria-pressed", drawOn ? "true" : "false");
 
   if (selectRedactStyle) {
     selectRedactStyle.value = state.rendererOptions.style;
@@ -1604,6 +1624,13 @@ function initEvents(): void {
       });
     }
   }
+
+  window.addEventListener("resize", () => {
+    if (!boxEditorPopover || boxEditorPopover.style.display === "none") return;
+    const state = appState.getState();
+    const box = state.boxes.find((item) => item.id === state.selectedBoxId);
+    if (box) showBoxEditorPopover(box);
+  });
 
   // 元画像比較（長押しまたはトグル）
   btnCompare.addEventListener("mousedown", () => appState.setComparing(true));
