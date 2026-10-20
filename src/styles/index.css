@@ -1473,6 +1473,12 @@ input:checked + .slider:before {
     font-size: 0.85rem;
   }
 
+  /* 下の「設定」と役割が重なる歯車、文字を消すと空になるサンプルボタンを残さない */
+  #btnHeaderMenu,
+  #btnOpenStorageModal {
+    display: none;
+  }
+
   /* Sheet Backdrop (Blur & Dim overlay) */
   .sheet-backdrop {
     display: block;
@@ -1859,17 +1865,9 @@ input:checked + .slider:before {
 }
 
 @media (max-width: 480px) {
-  /* On narrow screens, hide text in secondary header buttons to prevent cutting off 撮影/選択 */
-  #btnOpenStorageModal .btn-text,
-  #btnSampleHeader .btn-text {
-    display: none;
-  }
-
-  #btnOpenStorageModal,
   #btnSampleHeader {
-    padding: 0.35rem 0.45rem;
-    min-width: 32px;
-    justify-content: center;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.74rem;
   }
 
   .brand-title {

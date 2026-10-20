@@ -94,7 +94,6 @@ const btnToolbarAutoDetect = document.getElementById("btnToolbarAutoDetect") as 
 const boxEditorPopover = document.getElementById("boxEditorPopover") as HTMLDivElement;
 const btnPopoverClose = document.getElementById("btnPopoverClose") as HTMLButtonElement;
 const popoverCustomLabel = document.getElementById("popoverCustomLabel") as HTMLInputElement;
-const btnApplyPopoverCustom = document.getElementById("btnApplyPopoverCustom") as HTMLButtonElement;
 const btnPopoverToggle = document.getElementById("btnPopoverToggle") as HTMLButtonElement;
 const popoverToggleText = document.getElementById("popoverToggleText") as HTMLSpanElement;
 const btnPopoverDelete = document.getElementById("btnPopoverDelete") as HTMLButtonElement;
@@ -164,8 +163,13 @@ let drawStartX = 0;
 let drawStartY = 0;
 let currentDrawRect: { x: number; y: number; width: number; height: number } | null = null;
 let currentSnapResult: SnapResult | null = null;
-/** 確定前の手動黒塗り。同じ行への追加ストロークはこの1件を伸ばす。 */
+/** 確定前の手動黒塗り。この1本の前後だけ調整でき、別の線は足さない。 */
 let pendingManualBoxId: string | null = null;
+/** true のあいだだけ、次のドラッグで新しい黒塗りを1本引ける。 */
+let manualDrawArmed = true;
+let edgeAdjust: "start" | "end" | null = null;
+let edgeFixedX = 0;
+let edgeAdjustChanged = false;
 /** 現在の画像から検出された行の傾き角度（度）。図形の角度補正がオフのときは 0。 */
 let currentDetectedDeskewAngle = 0;
 let activeSnappedLine: import("./engine/ocr").OcrLine | null = null;
@@ -472,6 +476,8 @@ function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void
   cachedDeskewAngle = null;
   currentDetectedDeskewAngle = 0;
   pendingManualBoxId = null;
+  manualDrawArmed = img !== null;
+  edgeAdjust = null;
   isPerspectiveMode = false;
   perspectiveCorners = null;
   activeCornerKey = null;
@@ -967,12 +973,14 @@ function updateCanvasRender(): void {
     );
     ctx.restore();
   }
+
+  drawPendingEdgeHandles(ctx);
 }
 
 /**
  * 黒塗り編集ポップオーバーの表示と位置合わせ
  */
-function showBoxEditorPopover(box: RedactBox): void {
+function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
   if (!boxEditorPopover || !renderCanvas || !canvasViewport) return;
   const cRect = renderCanvas.getBoundingClientRect();
   const vRect = canvasViewport.getBoundingClientRect();
@@ -1021,6 +1029,8 @@ function showBoxEditorPopover(box: RedactBox): void {
     boxEditorPopover.style.bottom = "";
   }
 
+  if (preserveFields) return;
+
   // 入力欄とトグル表示の同期
   popoverCustomLabel.value = box.label || "";
   if (popoverToggleText) {
@@ -1055,15 +1065,132 @@ function rotationForManualStroke(snap: SnapResult | null): number | undefined {
   return angle;
 }
 
-/** ラベル選択・確定で黒塗りを確定し、編集モーダルを閉じる。 */
+/** ラベル選択・確定で黒塗りを確定し、編集モーダルを閉じる。以降のドラッグは画面移動。 */
 function confirmPendingRedaction(): void {
   pendingManualBoxId = null;
+  manualDrawArmed = false;
   hideBoxEditorPopover();
   if (appState.getState().selectedBoxId !== null) {
     appState.setSelectedBoxId(null);
   } else {
     updateCanvasRender();
   }
+  syncDrawCursor();
+}
+
+function pendingManualBox(): RedactBox | undefined {
+  if (!pendingManualBoxId) return undefined;
+  return appState.getState().boxes.find((box) => box.id === pendingManualBoxId);
+}
+
+function syncDrawCursor(): void {
+  if (!renderCanvas) return;
+  if (edgeAdjust) {
+    renderCanvas.style.cursor = "ew-resize";
+    return;
+  }
+  if (isPanning) {
+    renderCanvas.style.cursor = "grabbing";
+    return;
+  }
+  const mode = appState.getState().mode;
+  if (mode !== "draw" || !manualDrawArmed) {
+    renderCanvas.style.cursor = mode === "select" ? "default" : "grab";
+    return;
+  }
+  renderCanvas.style.cursor = "crosshair";
+}
+
+function beginPan(clientX: number, clientY: number): void {
+  const state = appState.getState();
+  isPanning = true;
+  panStartX = clientX;
+  panStartY = clientY;
+  panStartOffsetX = state.panX;
+  panStartOffsetY = state.panY;
+  renderCanvas.classList.add("is-interacting");
+  renderCanvas.style.cursor = "grabbing";
+}
+
+function pendingEdgeAt(x: number, y: number): "start" | "end" | null {
+  if (manualDrawArmed) return null;
+  const box = pendingManualBox();
+  if (!box) return null;
+  const rect = box.rect;
+  const view = renderCanvas.getBoundingClientRect();
+  const scale = renderCanvas.width / (view.width || 1);
+  const handle = Math.max(16, 32 * scale);
+  const padY = Math.max(12, 20 * scale);
+  if (y < rect.y - padY || y > rect.y + rect.height + padY) return null;
+  const reach = Math.min(handle, Math.max(rect.width * 0.45, 8));
+  const leftDist = Math.abs(x - rect.x);
+  const rightDist = Math.abs(x - (rect.x + rect.width));
+  const nearLeft = leftDist <= handle && x <= rect.x + reach;
+  const nearRight = rightDist <= handle && x >= rect.x + rect.width - reach;
+  if (nearLeft && (!nearRight || leftDist <= rightDist)) return "start";
+  if (nearRight) return "end";
+  return null;
+}
+
+function beginEdgeAdjust(edge: "start" | "end", box: RedactBox): void {
+  edgeAdjust = edge;
+  edgeFixedX = edge === "start" ? box.rect.x + box.rect.width : box.rect.x;
+  edgeAdjustChanged = false;
+  isDrawing = false;
+  isPanning = false;
+  renderCanvas.classList.add("is-interacting");
+  renderCanvas.style.cursor = "ew-resize";
+}
+
+function applyEdgeAdjust(canvasX: number): void {
+  if (!edgeAdjust || !pendingManualBoxId) return;
+  const box = pendingManualBox();
+  if (!box) return;
+  const minW = 8;
+  const x = edgeAdjust === "start" ? Math.min(canvasX, edgeFixedX - minW) : edgeFixedX;
+  const width = edgeAdjust === "start"
+    ? edgeFixedX - x
+    : Math.max(minW, canvasX - edgeFixedX);
+  if (Math.abs(x - box.rect.x) < 0.5 && Math.abs(width - box.rect.width) < 0.5) return;
+  edgeAdjustChanged = true;
+  appState.updateBox(pendingManualBoxId, {
+    rect: { x, y: box.rect.y, width, height: box.rect.height }
+  }, false);
+  updateCanvasRender();
+  const updated = pendingManualBox();
+  if (updated) showBoxEditorPopover(updated, true);
+}
+
+function endEdgeAdjust(): void {
+  const box = pendingManualBox();
+  const changed = edgeAdjustChanged;
+  edgeAdjust = null;
+  edgeAdjustChanged = false;
+  renderCanvas.classList.remove("is-interacting");
+  if (box && changed) {
+    appState.updateBox(box.id, { rect: box.rect }, true);
+  }
+  syncDrawCursor();
+  updateCanvasRender();
+}
+
+function drawPendingEdgeHandles(ctx: CanvasRenderingContext2D): void {
+  const box = pendingManualBox();
+  if (!box || manualDrawArmed) return;
+  const { x, y, width, height } = box.rect;
+  const zoom = Math.max(0.5, appState.getState().zoom);
+  const radius = Math.max(4.5, 7 / zoom);
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#0284c7";
+  ctx.lineWidth = Math.max(1.5, 2.2 / zoom);
+  for (const cx of [x, x + width]) {
+    ctx.beginPath();
+    ctx.arc(cx, y + height / 2, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function commitManualStroke(
@@ -1075,7 +1202,8 @@ function commitManualStroke(
     ? appState.getState().boxes.find((box) => box.id === pendingManualBoxId)
     : undefined;
 
-  if (pending && rectsShareRedactionLine(pending.rect, rect)) {
+  if (pending) {
+    if (!rectsShareRedactionLine(pending.rect, rect)) return;
     if (appState.getState().selectedBoxId !== pending.id) {
       appState.setSelectedBoxId(pending.id);
     }
@@ -1098,12 +1226,14 @@ function commitManualStroke(
 function finishManualStroke(): void {
   if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
     commitManualStroke(currentDrawRect, currentSnapResult);
+    if (pendingManualBoxId) manualDrawArmed = false;
   }
   currentDrawRect = null;
   currentSnapResult = null;
   activeSnappedLine = null;
   updateCanvasRender();
   refreshRedactedTextPreview(true);
+  syncDrawCursor();
 }
 
 /**
@@ -1517,12 +1647,12 @@ function initEvents(): void {
     appState.setMode("select");
   });
   toolDrawMode.addEventListener("click", () => {
+    pendingManualBoxId = null;
+    hideBoxEditorPopover();
+    if (appState.getState().selectedBoxId) appState.setSelectedBoxId(null);
+    manualDrawArmed = true;
     appState.setMode("draw");
-    const selected = appState.getState().selectedBoxId;
-    if (selected !== pendingManualBoxId) {
-      hideBoxEditorPopover();
-      if (selected) appState.setSelectedBoxId(null);
-    }
+    syncDrawCursor();
   });
 
   // 墨消しスタイル切り替え (ドロップダウン)
@@ -1551,25 +1681,11 @@ function initEvents(): void {
       });
     });
 
-    // 自由記述カスタムラベル適用
-    if (btnApplyPopoverCustom) {
-      btnApplyPopoverCustom.addEventListener("click", () => {
-        const val = popoverCustomLabel.value.trim();
-        const state = appState.getState();
-        if (!state.selectedBoxId || !val) return;
-
-        appState.updateBox(state.selectedBoxId, { label: val, reason: `ユーザー指定 (${val})` });
-        appState.setActiveDrawLabel(val);
-        showToast(`🏷️ ラベルを「${val}」に設定しました`);
-        confirmPendingRedaction();
-      });
-    }
-
     if (popoverCustomLabel) {
       popoverCustomLabel.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
-          btnApplyPopoverCustom.click();
+          btnPopoverConfirm.click();
         }
       });
     }
@@ -1591,6 +1707,15 @@ function initEvents(): void {
 
     if (btnPopoverConfirm) {
       btnPopoverConfirm.addEventListener("click", () => {
+        const state = appState.getState();
+        const typed = popoverCustomLabel?.value.trim();
+        if (state.selectedBoxId && typed) {
+          const current = state.boxes.find((box) => box.id === state.selectedBoxId);
+          if (current && current.label !== typed) {
+            appState.updateBox(state.selectedBoxId, { label: typed, reason: `ユーザー指定 (${typed})` });
+            appState.setActiveDrawLabel(typed);
+          }
+        }
         if (!appState.getState().selectedBoxId && !pendingManualBoxId) return;
         showToast("黒塗りを確定しました");
         confirmPendingRedaction();
@@ -1602,7 +1727,10 @@ function initEvents(): void {
       btnPopoverDelete.addEventListener("click", () => {
         const state = appState.getState();
         if (!state.selectedBoxId) return;
-        if (state.selectedBoxId === pendingManualBoxId) pendingManualBoxId = null;
+        if (state.selectedBoxId === pendingManualBoxId) {
+          pendingManualBoxId = null;
+          manualDrawArmed = false;
+        }
         appState.removeBox(state.selectedBoxId);
         hideBoxEditorPopover();
         updateCanvasRender();
@@ -2238,22 +2366,25 @@ function initEvents(): void {
       return;
     }
 
-    if (isDrawing || isPanning) return;
+    if (isDrawing || isPanning || edgeAdjust) return;
 
     const { x, y } = getCanvasCoordinates(e);
     const box = findBoxAtPosition(state.boxes, x, y);
+    if (state.mode === "select") {
+      renderCanvas.style.cursor = box ? "pointer" : "grab";
+    } else if (!manualDrawArmed) {
+      renderCanvas.style.cursor = pendingEdgeAt(x, y) ? "ew-resize" : "grab";
+    } else {
+      renderCanvas.style.cursor = "crosshair";
+    }
     if (box) {
-      renderCanvas.style.cursor = state.mode === "select" ? "pointer" : "crosshair";
       if (state.rendererOptions.activeHoverBoxId !== box.id) {
         appState.setRendererOptions({ activeHoverBoxId: box.id });
         updateCanvasRender();
       }
-    } else {
-      renderCanvas.style.cursor = state.mode === "select" ? "grab" : "crosshair";
-      if (state.rendererOptions.activeHoverBoxId !== null) {
-        appState.setRendererOptions({ activeHoverBoxId: null });
-        updateCanvasRender();
-      }
+    } else if (state.rendererOptions.activeHoverBoxId !== null) {
+      appState.setRendererOptions({ activeHoverBoxId: null });
+      updateCanvasRender();
     }
   });
 
@@ -2315,6 +2446,13 @@ function initEvents(): void {
         renderCanvas.style.cursor = "grabbing";
       }
     } else if (state.mode === "draw") {
+      if (!manualDrawArmed) {
+        const edge = pendingEdgeAt(x, y);
+        const pending = pendingManualBox();
+        if (edge && pending) beginEdgeAdjust(edge, pending);
+        else beginPan(e.clientX, e.clientY);
+        return;
+      }
       isDrawing = true;
       drawStartX = x;
       drawStartY = y;
@@ -2344,6 +2482,11 @@ function initEvents(): void {
       const { x, y } = getCanvasCoordinates(e);
       perspectiveCorners[activeCornerKey] = { x, y };
       updateCanvasRender();
+      return;
+    }
+
+    if (edgeAdjust) {
+      applyEdgeAdjust(getCanvasCoordinates(e).x);
       return;
     }
 
@@ -2393,10 +2536,15 @@ function initEvents(): void {
       return;
     }
 
+    if (edgeAdjust) {
+      endEdgeAdjust();
+      return;
+    }
+
     if (isPanning) {
       isPanning = false;
       renderCanvas.classList.remove("is-interacting");
-      renderCanvas.style.cursor = appState.getState().mode === "select" ? "default" : "crosshair";
+      syncDrawCursor();
     }
 
     if (!isDrawing) return;
@@ -2412,6 +2560,7 @@ function initEvents(): void {
     // 2本指ピンチ操作開始（モードに関わらず常にズーム＆パン）
     if (e.touches.length === 2) {
       e.preventDefault();
+      if (edgeAdjust) endEdgeAdjust();
       isPinching = true;
       isDrawing = false;
       isPanning = false;
@@ -2475,6 +2624,13 @@ function initEvents(): void {
         }
       } else if (state.mode === "draw") {
         e.preventDefault();
+        if (!manualDrawArmed) {
+          const edge = pendingEdgeAt(x, y);
+          const pending = pendingManualBox();
+          if (edge && pending) beginEdgeAdjust(edge, pending);
+          else beginPan(touch.clientX, touch.clientY);
+          return;
+        }
         isDrawing = true;
         drawStartX = x;
         drawStartY = y;
@@ -2534,6 +2690,12 @@ function initEvents(): void {
       return;
     }
 
+    if (edgeAdjust) {
+      e.preventDefault();
+      applyEdgeAdjust(getCanvasCoordinates(touch).x);
+      return;
+    }
+
     // 1本指パン移動
     if (isPanning) {
       e.preventDefault();
@@ -2585,6 +2747,11 @@ function initEvents(): void {
         activeCornerKey = null;
         updateCanvasRender();
       }
+      return;
+    }
+
+    if (edgeAdjust) {
+      endEdgeAdjust();
       return;
     }
 

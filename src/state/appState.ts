@@ -92,7 +92,7 @@ export class StateManager {
     this.notify();
   }
 
-  public updateBox(boxId: string, updates: Partial<RedactBox>): void {
+  public updateBox(boxId: string, updates: Partial<RedactBox>, recordHistory = true): void {
     const nextBoxes = this.state.boxes.map((b) => {
       if (b.id === boxId) {
         return { ...b, ...updates };
@@ -100,7 +100,7 @@ export class StateManager {
       return b;
     });
     this.state.boxes = nextBoxes;
-    this.pushHistory(nextBoxes);
+    if (recordHistory) this.pushHistory(nextBoxes);
     this.notify();
   }
 

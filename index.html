@@ -104,7 +104,7 @@
             <button id="toolSelectMode" class="tool-btn" title="黒塗りをタップして編集・解除">
               👆 選択/編集
             </button>
-            <button id="toolDrawMode" class="tool-btn active" title="ドラッグして自由に黒塗りを手動追加">
+            <button id="toolDrawMode" class="tool-btn active" title="黒塗りを1本引きます。引いたあとは端の調整と画面移動です。次の線はこのボタンを押してから">
               ✍️ 手動追加
             </button>
           </div>
@@ -226,9 +226,8 @@
             </div>
             <div class="popover-custom-row">
               <input type="text" id="popoverCustomLabel" class="popover-input" placeholder="自由入力 (例: 社内ID, 案件名)" maxlength="16" />
-              <button id="btnApplyPopoverCustom" class="btn btn-sm btn-primary">適用</button>
             </div>
-            <p id="popoverDraftHint" class="popover-draft-hint">確定するまで、同じ行に足した黒塗りは一つに伸びます。</p>
+            <p id="popoverDraftHint" class="popover-draft-hint">左右の端をドラッグすると長さを変えられます。ほかの場所をドラッグすると画面が移動します。</p>
             <button type="button" id="btnPopoverConfirm" class="btn btn-sm btn-primary btn-block popover-confirm-btn">確定</button>
             <div class="popover-actions">
               <button id="btnPopoverToggle" class="btn btn-sm btn-secondary" title="保護の一時解除/再適用">
