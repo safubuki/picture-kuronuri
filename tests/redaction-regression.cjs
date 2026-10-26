@@ -164,8 +164,10 @@ async function test(name, run) {
     const added = result.boxes.filter((b) => b.id.startsWith("llm-"));
     assert.equal(added.length, 2);
     assert(added.every((b) => b.type === "pii" && b.rect.y === 179));
-    assert.equal(added[0].rect.x, 507);
-    assert.equal(added[1].rect.x, 587);
+    // 1文字10px。「📩」はUTF-16で2文字ぶんなので、1つ目の Orion は8文字目。左右の余白は3px。
+    const text = "📩 社外秘: Orion / Orion";
+    assert.equal(added[0].rect.x, 420 + text.indexOf("Orion") * 10 - 3);
+    assert.equal(added[1].rect.x, 420 + text.lastIndexOf("Orion") * 10 - 3);
     assert.equal(result.llmAnalysis.status, "applied");
     assert.equal(result.llmAnalysis.addedBoxes, 2);
   });

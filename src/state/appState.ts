@@ -19,7 +19,6 @@ export interface AppState {
   panX: number;
   panY: number;
   lineSnapEnabled: boolean;
-  activeDrawLabel: string;
   selectedBoxId: string | null;
 }
 
@@ -39,7 +38,6 @@ export const initialState: AppState = {
   panX: 0,
   panY: 0,
   lineSnapEnabled: true,
-  activeDrawLabel: "手動",
   selectedBoxId: null
 };
 
@@ -87,11 +85,6 @@ export class StateManager {
     this.notify();
   }
 
-  public setActiveDrawLabel(label: string): void {
-    this.state.activeDrawLabel = label;
-    this.notify();
-  }
-
   public updateBox(boxId: string, updates: Partial<RedactBox>, recordHistory = true): void {
     const nextBoxes = this.state.boxes.map((b) => {
       if (b.id === boxId) {
@@ -132,12 +125,14 @@ export class StateManager {
 
   public addManualBox(
     rect: { x: number; y: number; width: number; height: number },
-    rotation?: number
+    rotation?: number,
+    select = true
   ): RedactBox | null {
     // 最小サイズチェック
     if (rect.width < 5 || rect.height < 5) return null;
 
-    const label = this.state.activeDrawLabel || "手動";
+    // 先に線を引いて、項目はあとからタップして決める。新しい線はいつも「手動」から始める。
+    const label = "手動";
     const newBox: RedactBox = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: "manual",
@@ -151,10 +146,28 @@ export class StateManager {
 
     const nextBoxes = [...this.state.boxes, newBox];
     this.state.boxes = nextBoxes;
-    this.state.selectedBoxId = newBox.id;
+    if (select) this.state.selectedBoxId = newBox.id;
     this.pushHistory(nextBoxes);
     this.notify();
     return newBox;
+  }
+
+  /** 一つの黒塗りを広げ、重なった黒塗りを取り除く。戻すは1回で元に戻る。 */
+  public mergeBoxes(
+    keepId: string,
+    rect: { x: number; y: number; width: number; height: number },
+    removeIds: string[]
+  ): void {
+    const remove = new Set(removeIds);
+    const nextBoxes = this.state.boxes
+      .filter(b => !remove.has(b.id))
+      .map(b => (b.id === keepId ? { ...b, rect } : b));
+    if (this.state.selectedBoxId && remove.has(this.state.selectedBoxId)) {
+      this.state.selectedBoxId = null;
+    }
+    this.state.boxes = nextBoxes;
+    this.pushHistory(nextBoxes);
+    this.notify();
   }
 
   public removeBox(boxId: string): void {

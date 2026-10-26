@@ -44,4 +44,22 @@ assert.equal(
   "複数行を囲む大きな矩形は既存の一行に吸収しない"
 );
 
+assert.equal(
+  rectsShareRedactionLine({ x: 10, y: 90, width: 40, height: 80 }, base),
+  false,
+  "四角で囲んだ大きな黒塗りに、一行の線は吸収しない"
+);
+
+assert.equal(
+  rectsShareRedactionLine(base, { x: 60, y: 100, width: 60, height: 20 }, 0.3),
+  true,
+  "重なる線は既存の黒塗りを広げる"
+);
+
+assert.equal(
+  rectsShareRedactionLine(base, { x: 102, y: 100, width: 40, height: 20 }, 0.3),
+  false,
+  "隙間を空けた線は、同じ行でも別の黒塗り"
+);
+
 console.log("manual stroke regression ok");

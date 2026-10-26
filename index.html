@@ -101,10 +101,10 @@
         <div class="workspace-toolbar">
           <!-- Operation Mode -->
           <div class="tool-group tool-mode-group">
-            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして編集。ドラッグで画面を移動">
-              👆 編集
+            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして項目を設定。ドラッグで画面を移動">
+              👆 選択/移動
             </button>
-            <button id="toolDrawMode" class="tool-btn" title="黒塗りを1本引きます。確定すると編集に戻ります">
+            <button id="toolDrawMode" class="tool-btn" title="文字を横になぞって黒塗りを続けて引けます。縦にさっと動かすとスクロール、長押しで四角く囲めます">
               ✍️ 黒塗追加
             </button>
           </div>
@@ -178,7 +178,7 @@
               </svg>
             </div>
             <h3>写真を選択、またはドロップ</h3>
-            <p>読み込むと文字行を自動で検出し、ガイドを表示します。位置合わせは編集、線を足すときは黒塗追加です。</p>
+            <p>読み込むと文字行を自動で検出し、ガイドを表示します。黒塗追加で文字をなぞって線を引き、あとから選択/移動で項目を設定できます。</p>
             <div class="action-buttons-group">
               <button id="btnSelectFile" class="btn btn-primary">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -227,7 +227,7 @@
             <div class="popover-custom-row">
               <input type="text" id="popoverCustomLabel" class="popover-input" placeholder="自由入力 (例: 社内ID, 案件名)" maxlength="16" />
             </div>
-            <p id="popoverDraftHint" class="popover-draft-hint">左右の端をドラッグすると長さを変えられます。ほかの場所をドラッグすると画面が移動します。</p>
+            <p id="popoverDraftHint" class="popover-draft-hint">両端の丸をドラッグすると長さを変えられます。</p>
             <button type="button" id="btnPopoverConfirm" class="btn btn-sm btn-primary btn-block popover-confirm-btn">確定</button>
             <div class="popover-actions">
               <button id="btnPopoverToggle" class="btn btn-sm btn-secondary" title="保護の一時解除/再適用">
@@ -290,10 +290,10 @@
 
       <!-- Mobile Quick Action Bar (Only visible on mobile <= 768px) -->
       <nav id="mobileActionBar" class="mobile-action-bar" aria-label="モバイルクイック操作">
-        <button id="btnMobileSelect" class="btn btn-secondary btn-mobile-mode" type="button" title="黒塗りをタップして編集。ドラッグで画面を移動">
-          編集
+        <button id="btnMobileSelect" class="btn btn-secondary btn-mobile-mode" type="button" title="黒塗りをタップして項目を設定。ドラッグで画面を移動">
+          選択/移動
         </button>
-        <button id="btnMobileDraw" class="btn btn-secondary btn-mobile-mode" type="button" title="黒塗りを1本引きます。確定すると編集に戻ります">
+        <button id="btnMobileDraw" class="btn btn-secondary btn-mobile-mode" type="button" title="文字を横になぞって黒塗りを続けて引けます。縦にさっと動かすとスクロール、長押しで四角く囲めます">
           黒塗追加
         </button>
         <button id="btnMobileCopy" class="btn btn-primary btn-mobile-main" title="画像をクリップボードにコピー">

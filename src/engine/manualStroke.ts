@@ -6,12 +6,17 @@ export interface ManualStrokeRect {
 }
 
 /**
- * 未確定の黒塗りへ、同じ行の追加ストロークを足せるか。
- * 隣の1文字ぶんは結合し、別の行や大きく離れた区間は別の黒塗りにする。
+ * 既存の黒塗りへ、同じ行の追加ストロークを足せるか。
+ * 別の行や大きく離れた区間は別の黒塗りにする。gapFactor は行の高さに対して許す隙間の割合。
  */
-export function rectsShareRedactionLine(base: ManualStrokeRect, extra: ManualStrokeRect): boolean {
+export function rectsShareRedactionLine(
+  base: ManualStrokeRect,
+  extra: ManualStrokeRect,
+  gapFactor = 1.6
+): boolean {
   if (base.width < 1 || base.height < 1 || extra.width < 1 || extra.height < 1) return false;
   if (extra.height > base.height * 2.2 && extra.height > base.height + 14) return false;
+  if (base.height > extra.height * 2.2 && base.height > extra.height + 14) return false;
 
   const baseMid = base.y + base.height / 2;
   const extraMid = extra.y + extra.height / 2;
@@ -19,7 +24,7 @@ export function rectsShareRedactionLine(base: ManualStrokeRect, extra: ManualStr
   if (Math.abs(baseMid - extraMid) > tolerance) return false;
 
   const gap = Math.max(base.x, extra.x) - Math.min(base.x + base.width, extra.x + extra.width);
-  const maxGap = Math.max(12, Math.max(base.height, extra.height) * 1.6);
+  const maxGap = Math.max(base.height, extra.height) * gapFactor;
   return gap <= maxGap;
 }
 

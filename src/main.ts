@@ -162,11 +162,29 @@ let drawStartX = 0;
 let drawStartY = 0;
 let currentDrawRect: { x: number; y: number; width: number; height: number } | null = null;
 let currentSnapResult: SnapResult | null = null;
-/** 確定前の手動黒塗り。この1本の前後だけ調整でき、別の線は足さない。 */
-let pendingManualBoxId: string | null = null;
-/** true のあいだだけ、次のドラッグで新しい黒塗りを1本引ける。 */
-let manualDrawArmed = true;
+/**
+ * 黒塗追加で、押してから動かし始めるまでの操作。
+ * 動いた向きで、線を引く・スクロール・端の調整のどれにするかを決める。動かさずに離せばタップ。
+ */
+interface DrawGesture {
+  clientX: number;
+  clientY: number;
+  x: number;
+  y: number;
+  timer: number | null;
+}
+let drawGesture: DrawGesture | null = null;
+/** 長押しのあと、線ではなく四角で囲んでいるあいだ true。 */
+let isRectDrawing = false;
+/** 押してから操作を決めるまでの移動量（画面px）。 */
+const GESTURE_SLOP_PX = 10;
+/** 四角で囲むモードに切り替える長押しの時間。 */
+const LONG_PRESS_MS = 450;
+/** 重なるか、これだけの隙間（行の高さに対する割合）までの線は既存の黒塗りを広げる。 */
+const STROKE_JOIN_GAP = 0.3;
+let drawHintShown = false;
 let edgeAdjust: "start" | "end" | null = null;
+let edgeAdjustBoxId: string | null = null;
 let edgeFixedX = 0;
 let edgeAdjustChanged = false;
 /** 現在の画像から検出された行の傾き角度（度）。図形の角度補正がオフのときは 0。 */
@@ -181,6 +199,13 @@ let panStartX = 0;
 let panStartY = 0;
 let panStartOffsetX = 0;
 let panStartOffsetY = 0;
+/** 指を離したあと、画面が滑って止まるまでの速さ（px/ms）。 */
+let panVelocityX = 0;
+let panVelocityY = 0;
+let lastPanSampleTime = 0;
+let lastPanSampleX = 0;
+let lastPanSampleY = 0;
+let panInertiaFrame: number | null = null;
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "Space" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
@@ -474,9 +499,12 @@ function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void
   lastLlmAnalysis = null;
   cachedDeskewAngle = null;
   currentDetectedDeskewAngle = 0;
-  pendingManualBoxId = null;
-  manualDrawArmed = false;
+  cancelDrawGesture();
+  stopPanInertia();
+  isDrawing = false;
+  isRectDrawing = false;
   edgeAdjust = null;
+  edgeAdjustBoxId = null;
   isPerspectiveMode = false;
   perspectiveCorners = null;
   activeCornerKey = null;
@@ -733,7 +761,7 @@ async function detectLinesForManualGuides(sourceImage: HTMLImageElement): Promis
     lastOcrResult = preloaded;
     updateCanvasRender();
     refreshRedactedTextPreview(true);
-    showToast(`文字行を ${preloaded.lines.length} 本検出しました。ガイドに沿ってドラッグできます`, 4000);
+    showToast(`文字行を ${preloaded.lines.length} 本検出しました。黒塗追加でガイドに沿ってなぞれます`, 4000);
     return;
   }
 
@@ -751,7 +779,7 @@ async function detectLinesForManualGuides(sourceImage: HTMLImageElement): Promis
     refreshRedactedTextPreview(true);
     if (revision !== analysisRevision) return;
     if (ocr.lines.length > 0) {
-      showToast(`文字行を ${ocr.lines.length} 本検出しました。ガイドに沿ってドラッグすると黒塗りできます`, 4500);
+      showToast(`文字行を ${ocr.lines.length} 本検出しました。黒塗追加でガイドに沿ってなぞれます`, 4500);
     } else if (ocr.status === "timeout") {
       showToast("文字行の検出が時間内に終わりませんでした。自由な矩形で黒塗りできます", 5000);
     } else {
@@ -954,7 +982,7 @@ function updateCanvasRender(): void {
       ctx.translate(-cx, -cy);
     }
     const isSnapped = currentSnapResult?.isSnapped;
-    ctx.strokeStyle = isSnapped ? "#10b981" : "#38bdf8";
+    ctx.strokeStyle = isRectDrawing ? "#f59e0b" : isSnapped ? "#10b981" : "#38bdf8";
     ctx.lineWidth = Math.max(1.5, 2.5 / Math.max(0.5, state.zoom));
     ctx.setLineDash(isSnapped ? [4, 2] : [6, 4]);
     ctx.strokeRect(
@@ -963,17 +991,25 @@ function updateCanvasRender(): void {
       currentDrawRect.width,
       currentDrawRect.height
     );
-    ctx.fillStyle = isSnapped ? "rgba(16, 185, 129, 0.35)" : "rgba(56, 189, 248, 0.25)";
+    ctx.fillStyle = isRectDrawing
+      ? "rgba(245, 158, 11, 0.25)"
+      : isSnapped ? "rgba(16, 185, 129, 0.35)" : "rgba(56, 189, 248, 0.25)";
     ctx.fillRect(
       currentDrawRect.x,
       currentDrawRect.y,
       currentDrawRect.width,
       currentDrawRect.height
     );
+    if (isRectDrawing) {
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(drawStartX, drawStartY, Math.max(5, 9 / Math.max(0.5, state.zoom)), 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
-  drawPendingEdgeHandles(ctx);
+  drawManualEdgeHandles(ctx);
 }
 
 /**
@@ -996,7 +1032,7 @@ function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
   boxEditorPopover.style.display = "block";
   canvasViewport.classList.add("editor-open");
   const draftHint = document.getElementById("popoverDraftHint");
-  if (draftHint) draftHint.hidden = box.id !== pendingManualBoxId;
+  if (draftHint) draftHint.hidden = !(box.isManual && appState.getState().mode === "draw");
 
   // 狭い画面では編集パネルを下端に固定し、上の画像を見えるようにする
   if (window.matchMedia("(max-width: 768px)").matches) {
@@ -1064,28 +1100,22 @@ function rotationForManualStroke(snap: SnapResult | null): number | undefined {
   return angle;
 }
 
-/** 確定・キャンセル後は編集モードへ戻す。追加ボタンの見た目と操作を一致させる。 */
-function enterEditMode(): void {
-  pendingManualBoxId = null;
-  manualDrawArmed = false;
+/** 黒塗りの項目設定を開く。線を引いたあと、その黒塗りをタップしたときだけ開く。 */
+function openBoxEditor(box: RedactBox): void {
+  appState.setSelectedBoxId(box.id);
+  showBoxEditorPopover(box);
+}
+
+/** 項目設定を閉じるだけで、モードはそのまま。黒塗追加中なら続けて線を引ける。 */
+function dismissBoxEditor(): void {
   hideBoxEditorPopover();
-  const state = appState.getState();
-  if (state.mode !== "select") appState.setMode("select");
-  if (appState.getState().selectedBoxId !== null) {
-    appState.setSelectedBoxId(null);
-  } else {
-    updateCanvasRender();
-  }
+  if (appState.getState().selectedBoxId !== null) appState.setSelectedBoxId(null);
+}
+
+function closeBoxEditor(): void {
+  dismissBoxEditor();
+  updateCanvasRender();
   syncDrawCursor();
-}
-
-function confirmPendingRedaction(): void {
-  enterEditMode();
-}
-
-function pendingManualBox(): RedactBox | undefined {
-  if (!pendingManualBoxId) return undefined;
-  return appState.getState().boxes.find((box) => box.id === pendingManualBoxId);
 }
 
 function syncDrawCursor(): void {
@@ -1098,47 +1128,100 @@ function syncDrawCursor(): void {
     renderCanvas.style.cursor = "grabbing";
     return;
   }
-  const mode = appState.getState().mode;
-  if (mode !== "draw" || !manualDrawArmed) {
-    renderCanvas.style.cursor = mode === "select" ? "default" : "grab";
-    return;
-  }
-  renderCanvas.style.cursor = "crosshair";
+  renderCanvas.style.cursor = appState.getState().mode === "draw" ? "crosshair" : "default";
 }
 
 function beginPan(clientX: number, clientY: number): void {
+  stopPanInertia();
   const state = appState.getState();
   isPanning = true;
   panStartX = clientX;
   panStartY = clientY;
   panStartOffsetX = state.panX;
   panStartOffsetY = state.panY;
+  panVelocityX = 0;
+  panVelocityY = 0;
+  lastPanSampleTime = performance.now();
+  lastPanSampleX = clientX;
+  lastPanSampleY = clientY;
   renderCanvas.classList.add("is-interacting");
   renderCanvas.style.cursor = "grabbing";
 }
 
-function pendingEdgeAt(x: number, y: number): "start" | "end" | null {
-  if (manualDrawArmed) return null;
-  const box = pendingManualBox();
-  if (!box) return null;
-  const rect = box.rect;
+function movePan(clientX: number, clientY: number): void {
+  const now = performance.now();
+  const dt = now - lastPanSampleTime;
+  if (dt > 0) {
+    // 直近の動きを重く見て、離す直前の速さを慣性に使う
+    const blend = Math.min(1, dt / 50);
+    panVelocityX += ((clientX - lastPanSampleX) / dt - panVelocityX) * blend;
+    panVelocityY += ((clientY - lastPanSampleY) / dt - panVelocityY) * blend;
+  }
+  lastPanSampleTime = now;
+  lastPanSampleX = clientX;
+  lastPanSampleY = clientY;
+  appState.setPan(panStartOffsetX + clientX - panStartX, panStartOffsetY + clientY - panStartY);
+  applyCanvasTransform();
+}
+
+/** 指を離す。さっと払っていれば、その勢いで少し滑らせてから止める。 */
+function endPan(): void {
+  isPanning = false;
+  renderCanvas.classList.remove("is-interacting");
+  syncDrawCursor();
+  const idle = performance.now() - lastPanSampleTime;
+  if (idle > 80 || Math.hypot(panVelocityX, panVelocityY) < 0.3) return;
+  let last = performance.now();
+  const step = (now: number): void => {
+    const dt = Math.min(48, now - last);
+    last = now;
+    const state = appState.getState();
+    appState.setPan(state.panX + panVelocityX * dt, state.panY + panVelocityY * dt);
+    applyCanvasTransform();
+    const decay = Math.pow(0.95, dt / 16);
+    panVelocityX *= decay;
+    panVelocityY *= decay;
+    panInertiaFrame = Math.hypot(panVelocityX, panVelocityY) < 0.02 ? null : requestAnimationFrame(step);
+  };
+  panInertiaFrame = requestAnimationFrame(step);
+}
+
+function stopPanInertia(): void {
+  if (panInertiaFrame !== null) cancelAnimationFrame(panInertiaFrame);
+  panInertiaFrame = null;
+}
+
+/** 黒塗追加中に、手で引いた黒塗りの左右の端（丸いつまみ）に触れているか。 */
+function manualEdgeAt(x: number, y: number): { box: RedactBox; edge: "start" | "end" } | null {
   const view = renderCanvas.getBoundingClientRect();
   const scale = renderCanvas.width / (view.width || 1);
-  const handle = Math.max(16, 32 * scale);
-  const padY = Math.max(12, 20 * scale);
-  if (y < rect.y - padY || y > rect.y + rect.height + padY) return null;
-  const reach = Math.min(handle, Math.max(rect.width * 0.45, 8));
-  const leftDist = Math.abs(x - rect.x);
-  const rightDist = Math.abs(x - (rect.x + rect.width));
-  const nearLeft = leftDist <= handle && x <= rect.x + reach;
-  const nearRight = rightDist <= handle && x >= rect.x + rect.width - reach;
-  if (nearLeft && (!nearRight || leftDist <= rightDist)) return "start";
-  if (nearRight) return "end";
-  return null;
+  const handle = Math.max(10, 18 * scale);
+  let best: { box: RedactBox; edge: "start" | "end" } | null = null;
+  let bestDist = Infinity;
+  for (const box of appState.getState().boxes) {
+    if (!box.isManual) continue;
+    const rect = box.rect;
+    // 上下はその黒塗りの行の中だけ。すぐ下の行から引き始めた線が、端のつまみを掴まないようにする。
+    const padY = Math.min(4 * scale, rect.height * 0.25);
+    if (y < rect.y - padY || y > rect.y + rect.height + padY) continue;
+    const reach = Math.min(handle, Math.max(rect.width * 0.3, 6));
+    const leftDist = Math.abs(x - rect.x);
+    const rightDist = Math.abs(x - (rect.x + rect.width));
+    if (leftDist <= handle && x <= rect.x + reach && leftDist < bestDist) {
+      best = { box, edge: "start" };
+      bestDist = leftDist;
+    }
+    if (rightDist <= handle && x >= rect.x + rect.width - reach && rightDist < bestDist) {
+      best = { box, edge: "end" };
+      bestDist = rightDist;
+    }
+  }
+  return best;
 }
 
 function beginEdgeAdjust(edge: "start" | "end", box: RedactBox): void {
   edgeAdjust = edge;
+  edgeAdjustBoxId = box.id;
   edgeFixedX = edge === "start" ? box.rect.x + box.rect.width : box.rect.x;
   edgeAdjustChanged = false;
   isDrawing = false;
@@ -1147,29 +1230,31 @@ function beginEdgeAdjust(edge: "start" | "end", box: RedactBox): void {
   renderCanvas.style.cursor = "ew-resize";
 }
 
+function edgeAdjustBox(): RedactBox | undefined {
+  if (!edgeAdjustBoxId) return undefined;
+  return appState.getState().boxes.find((box) => box.id === edgeAdjustBoxId);
+}
+
 function applyEdgeAdjust(canvasX: number): void {
-  if (!edgeAdjust || !pendingManualBoxId) return;
-  const box = pendingManualBox();
-  if (!box) return;
-  const minW = 8;
-  const x = edgeAdjust === "start" ? Math.min(canvasX, edgeFixedX - minW) : edgeFixedX;
-  const width = edgeAdjust === "start"
-    ? edgeFixedX - x
-    : Math.max(minW, canvasX - edgeFixedX);
+  const box = edgeAdjustBox();
+  if (!edgeAdjust || !box) return;
+  // 反対側の端を越えたら、そのまま向きを入れ替えて伸ばす。
+  const x = Math.min(canvasX, edgeFixedX);
+  const width = Math.max(8, Math.abs(canvasX - edgeFixedX));
   if (Math.abs(x - box.rect.x) < 0.5 && Math.abs(width - box.rect.width) < 0.5) return;
   edgeAdjustChanged = true;
-  appState.updateBox(pendingManualBoxId, {
+  appState.updateBox(box.id, {
     rect: { x, y: box.rect.y, width, height: box.rect.height }
   }, false);
-  updateCanvasRender();
-  const updated = pendingManualBox();
-  if (updated) showBoxEditorPopover(updated, true);
+  const updated = edgeAdjustBox();
+  if (updated && appState.getState().selectedBoxId === updated.id) showBoxEditorPopover(updated, true);
 }
 
 function endEdgeAdjust(): void {
-  const box = pendingManualBox();
+  const box = edgeAdjustBox();
   const changed = edgeAdjustChanged;
   edgeAdjust = null;
+  edgeAdjustBoxId = null;
   edgeAdjustChanged = false;
   renderCanvas.classList.remove("is-interacting");
   if (box && changed) {
@@ -1179,59 +1264,176 @@ function endEdgeAdjust(): void {
   updateCanvasRender();
 }
 
-function drawPendingEdgeHandles(ctx: CanvasRenderingContext2D): void {
-  const box = pendingManualBox();
-  if (!box || manualDrawArmed) return;
-  const { x, y, width, height } = box.rect;
-  const zoom = Math.max(0.5, appState.getState().zoom);
+/** 黒塗追加中は、手で引いた黒塗りの両端に長さ調整のつまみを出す。 */
+function drawManualEdgeHandles(ctx: CanvasRenderingContext2D): void {
+  const state = appState.getState();
+  if (state.mode !== "draw") return;
+  const zoom = Math.max(0.5, state.zoom);
   const radius = Math.max(4.5, 7 / zoom);
   ctx.save();
   ctx.fillStyle = "#ffffff";
   ctx.strokeStyle = "#0284c7";
   ctx.lineWidth = Math.max(1.5, 2.2 / zoom);
-  for (const cx of [x, x + width]) {
-    ctx.beginPath();
-    ctx.arc(cx, y + height / 2, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+  for (const box of state.boxes) {
+    if (!box.isManual) continue;
+    const { x, y, width, height } = box.rect;
+    for (const cx of [x, x + width]) {
+      ctx.beginPath();
+      ctx.arc(cx, y + height / 2, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
   }
   ctx.restore();
 }
 
+/** 行が見つからない場所に引く線の太さ。検出した文字行の高さの中央値に合わせる。 */
+function typicalLineHeight(): number {
+  const heights = (lastOcrResult?.lines ?? [])
+    .map((line) => line.bbox.y1 - line.bbox.y0)
+    .filter((h) => h > 4)
+    .sort((a, b) => a - b);
+  if (heights.length > 0) return heights[Math.floor(heights.length / 2)] + 4;
+  return Math.max(16, Math.round(renderCanvas.height * 0.022));
+}
+
+/** 線は指の上下のぶれを無視し、引き始めた行に沿わせる。四角で囲むときだけ縦横に広げる。 */
+function updateManualStroke(x: number, y: number): void {
+  currentSnapResult = null;
+  activeSnappedLine = null;
+
+  if (isRectDrawing) {
+    currentDrawRect = {
+      x: Math.min(drawStartX, x),
+      y: Math.min(drawStartY, y),
+      width: Math.abs(x - drawStartX),
+      height: Math.abs(y - drawStartY)
+    };
+    updateCanvasRender();
+    return;
+  }
+
+  const state = appState.getState();
+  if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
+    const snap = calculateLineSnap(
+      lastOcrResult.lines,
+      { x: drawStartX, y: drawStartY },
+      { x, y: drawStartY },
+      currentLineSnapOptions()
+    );
+    if (snap.isSnapped) {
+      currentSnapResult = snap;
+      activeSnappedLine = snap.matchedLine;
+      currentDrawRect = snap.rect;
+      updateCanvasRender();
+      return;
+    }
+  }
+
+  const height = typicalLineHeight();
+  currentDrawRect = {
+    x: Math.min(drawStartX, x),
+    y: Math.max(0, drawStartY - height / 2),
+    width: Math.abs(x - drawStartX),
+    height
+  };
+  updateCanvasRender();
+}
+
+function beginDrawGesture(clientX: number, clientY: number, x: number, y: number): void {
+  cancelDrawGesture();
+  stopPanInertia();
+  isDrawing = false;
+  isRectDrawing = false;
+  drawGesture = { clientX, clientY, x, y, timer: window.setTimeout(armRectDraw, LONG_PRESS_MS) };
+}
+
+function cancelDrawGesture(): void {
+  if (drawGesture?.timer) clearTimeout(drawGesture.timer);
+  drawGesture = null;
+}
+
+/** 長押しで、アイコンや写真を四角で囲むモードに切り替える。 */
+function armRectDraw(): void {
+  const gesture = drawGesture;
+  if (!gesture) return;
+  drawGesture = null;
+  dismissBoxEditor();
+  isDrawing = true;
+  isRectDrawing = true;
+  drawStartX = gesture.x;
+  drawStartY = gesture.y;
+  currentDrawRect = { x: gesture.x, y: gesture.y, width: 0, height: 0 };
+  currentSnapResult = null;
+  activeSnappedLine = null;
+  navigator.vibrate?.(15);
+  showToast("四角で囲みます。そのまま指を動かしてください", 2000);
+  updateCanvasRender();
+}
+
+/** 動いた向きで操作を決める。縦にさっと動かせばスクロール、横なら線を引くか端を調整する。 */
+function resolveDrawGesture(clientX: number, clientY: number): void {
+  const gesture = drawGesture;
+  if (!gesture) return;
+  const dx = clientX - gesture.clientX;
+  const dy = clientY - gesture.clientY;
+  if (Math.hypot(dx, dy) < GESTURE_SLOP_PX) return;
+  cancelDrawGesture();
+
+  if (Math.abs(dy) > Math.abs(dx)) {
+    dismissBoxEditor();
+    beginPan(gesture.clientX, gesture.clientY);
+    return;
+  }
+
+  const edge = manualEdgeAt(gesture.x, gesture.y);
+  if (edge) {
+    if (appState.getState().selectedBoxId !== edge.box.id) dismissBoxEditor();
+    beginEdgeAdjust(edge.edge, edge.box);
+    return;
+  }
+
+  dismissBoxEditor();
+  isDrawing = true;
+  isRectDrawing = false;
+  drawStartX = gesture.x;
+  drawStartY = gesture.y;
+}
+
+/** 動かさずに離したときはタップ。黒塗りの上なら項目設定を開く。 */
+function endDrawGesture(): void {
+  const gesture = drawGesture;
+  if (!gesture) return;
+  cancelDrawGesture();
+  const box = findBoxAtPosition(appState.getState().boxes, gesture.x, gesture.y);
+  if (box) openBoxEditor(box);
+  else dismissBoxEditor();
+}
+
+/** 線を足す。同じ行で重なる手動の黒塗りがあれば、それを広げて1本にまとめる。 */
 function commitManualStroke(
   rect: { x: number; y: number; width: number; height: number },
   snap: SnapResult | null
 ): void {
-  const rotation = rotationForManualStroke(snap);
-  const pending = pendingManualBoxId
-    ? appState.getState().boxes.find((box) => box.id === pendingManualBoxId)
-    : undefined;
-
-  if (pending) {
-    if (!rectsShareRedactionLine(pending.rect, rect)) return;
-    if (appState.getState().selectedBoxId !== pending.id) {
-      appState.setSelectedBoxId(pending.id);
-    }
-    appState.updateBox(pending.id, {
-      rect: extendRectOnSameLine(pending.rect, rect),
-      rotation: toggleFollowSlope.checked ? (pending.rotation ?? rotation) : undefined
-    });
-    const updated = appState.getState().boxes.find((box) => box.id === pending.id);
-    if (updated) showBoxEditorPopover(updated);
-    showToast("同じ行の黒塗りを伸ばしました");
+  const joined = appState.getState().boxes.filter(
+    (box) => box.isManual && rectsShareRedactionLine(box.rect, rect, STROKE_JOIN_GAP)
+  );
+  if (joined.length === 0) {
+    appState.addManualBox(rect, rotationForManualStroke(snap), false);
     return;
   }
-
-  const created = appState.addManualBox(rect, rotation);
-  pendingManualBoxId = created?.id ?? null;
-  if (created) showBoxEditorPopover(created);
-  showToast(snap?.isSnapped ? "✨ 行に合わせて黒塗りを追加しました" : "黒塗りを追加しました");
+  const merged = joined.reduce((acc, box) => extendRectOnSameLine(acc, box.rect), rect);
+  appState.mergeBoxes(joined[0].id, merged, joined.slice(1).map((box) => box.id));
 }
 
 function finishManualStroke(): void {
-  if (currentDrawRect && currentDrawRect.width >= 5 && currentDrawRect.height >= 5) {
-    commitManualStroke(currentDrawRect, currentSnapResult);
-    if (pendingManualBoxId) manualDrawArmed = false;
+  const rect = currentDrawRect;
+  const asRect = isRectDrawing;
+  isDrawing = false;
+  isRectDrawing = false;
+  if (rect && rect.width >= 5 && rect.height >= 5) {
+    if (asRect) appState.addManualBox(rect, undefined, false);
+    else commitManualStroke(rect, currentSnapResult);
   }
   currentDrawRect = null;
   currentSnapResult = null;
@@ -1239,6 +1441,21 @@ function finishManualStroke(): void {
   updateCanvasRender();
   refreshRedactedTextPreview(true);
   syncDrawCursor();
+}
+
+/** 指が離れずに操作が打ち切られたとき（着信など）。引きかけの線は捨てる。 */
+function abortCanvasGesture(): void {
+  cancelDrawGesture();
+  if (edgeAdjust) endEdgeAdjust();
+  isDrawing = false;
+  isRectDrawing = false;
+  isPanning = false;
+  currentDrawRect = null;
+  currentSnapResult = null;
+  activeSnappedLine = null;
+  renderCanvas.classList.remove("is-interacting");
+  syncDrawCursor();
+  updateCanvasRender();
 }
 
 /**
@@ -1655,17 +1872,20 @@ function initEvents(): void {
 
   // 操作モード切り替え
   toolSelectMode.addEventListener("click", () => {
-    manualDrawArmed = false;
+    cancelDrawGesture();
     appState.setMode("select");
     syncDrawCursor();
   });
+  // 黒塗追加は選択/移動に切り替えるまで続く。項目の設定は、引いた黒塗りをタップしてから。
   toolDrawMode.addEventListener("click", () => {
-    pendingManualBoxId = null;
-    hideBoxEditorPopover();
-    if (appState.getState().selectedBoxId) appState.setSelectedBoxId(null);
-    manualDrawArmed = true;
+    const wasDrawing = appState.getState().mode === "draw";
+    dismissBoxEditor();
     appState.setMode("draw");
     syncDrawCursor();
+    if (!wasDrawing && !drawHintShown && appState.getState().sourceImage) {
+      drawHintShown = true;
+      showToast("文字を横になぞって黒塗り。縦にさっと動かすとスクロール、長押しで四角く囲めます", 4000);
+    }
   });
   btnMobileSelect?.addEventListener("click", () => toolSelectMode.click());
   btnMobileDraw?.addEventListener("click", () => toolDrawMode.click());
@@ -1690,9 +1910,8 @@ function initEvents(): void {
         if (!state.selectedBoxId || !label) return;
 
         appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label})` });
-        appState.setActiveDrawLabel(label);
         showToast(`🏷️ ラベルを「${label}」に設定しました`);
-        confirmPendingRedaction();
+        closeBoxEditor();
       });
     });
 
@@ -1728,12 +1947,11 @@ function initEvents(): void {
           const current = state.boxes.find((box) => box.id === state.selectedBoxId);
           if (current && current.label !== typed) {
             appState.updateBox(state.selectedBoxId, { label: typed, reason: `ユーザー指定 (${typed})` });
-            appState.setActiveDrawLabel(typed);
           }
         }
-        if (!appState.getState().selectedBoxId && !pendingManualBoxId) return;
-        showToast("黒塗りを確定しました");
-        confirmPendingRedaction();
+        if (!appState.getState().selectedBoxId) return;
+        showToast("項目を設定しました");
+        closeBoxEditor();
       });
     }
 
@@ -1743,16 +1961,15 @@ function initEvents(): void {
         const state = appState.getState();
         if (!state.selectedBoxId) return;
         appState.removeBox(state.selectedBoxId);
-        hideBoxEditorPopover();
         refreshRedactedTextPreview(true);
         showToast("🗑️ 黒塗りを削除しました");
-        enterEditMode();
+        closeBoxEditor();
       });
     }
 
     if (btnPopoverClose) {
       btnPopoverClose.addEventListener("click", () => {
-        enterEditMode();
+        closeBoxEditor();
       });
     }
   }
@@ -2267,6 +2484,7 @@ function initEvents(): void {
   });
 
   btnZoomIn.addEventListener("click", () => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
     appState.setZoom(state.zoom * 1.25);
@@ -2274,6 +2492,7 @@ function initEvents(): void {
   });
 
   btnZoomOut.addEventListener("click", () => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
     appState.setZoom(state.zoom / 1.25);
@@ -2281,6 +2500,7 @@ function initEvents(): void {
   });
 
   btnZoomReset.addEventListener("click", () => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
     // 100% と 200%（または全体）をトグル
@@ -2293,6 +2513,7 @@ function initEvents(): void {
   });
 
   btnZoomFit.addEventListener("click", () => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
     appState.resetZoomPan();
@@ -2333,6 +2554,7 @@ function initEvents(): void {
 
   // マウスホイールによるズーム（カーソル位置中心）
   canvasViewport.addEventListener("wheel", (e) => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
     e.preventDefault();
@@ -2370,16 +2592,14 @@ function initEvents(): void {
       return;
     }
 
-    if (isDrawing || isPanning || edgeAdjust) return;
+    if (drawGesture || isDrawing || isPanning || edgeAdjust) return;
 
     const { x, y } = getCanvasCoordinates(e);
     const box = findBoxAtPosition(state.boxes, x, y);
     if (state.mode === "select") {
       renderCanvas.style.cursor = box ? "pointer" : "grab";
-    } else if (!manualDrawArmed) {
-      renderCanvas.style.cursor = pendingEdgeAt(x, y) ? "ew-resize" : "grab";
     } else {
-      renderCanvas.style.cursor = "crosshair";
+      renderCanvas.style.cursor = manualEdgeAt(x, y) ? "ew-resize" : "crosshair";
     }
     if (box) {
       if (state.rendererOptions.activeHoverBoxId !== box.id) {
@@ -2413,13 +2633,7 @@ function initEvents(): void {
     // 中クリック、またはスペースキー押下中の左クリックは常にパン移動
     if (e.button === 1 || (e.button === 0 && isSpaceDown)) {
       e.preventDefault();
-      isPanning = true;
-      panStartX = e.clientX;
-      panStartY = e.clientY;
-      panStartOffsetX = state.panX;
-      panStartOffsetY = state.panY;
-      renderCanvas.classList.add("is-interacting");
-      renderCanvas.style.cursor = "grabbing";
+      beginPan(e.clientX, e.clientY);
       return;
     }
 
@@ -2430,53 +2644,14 @@ function initEvents(): void {
     if (state.mode === "select") {
       const box = findBoxAtPosition(state.boxes, x, y);
       if (box) {
-        if (pendingManualBoxId && pendingManualBoxId !== box.id) pendingManualBoxId = null;
-        appState.setSelectedBoxId(box.id);
-        showBoxEditorPopover(box);
-        updateCanvasRender();
+        openBoxEditor(box);
       } else {
-        if (appState.getState().selectedBoxId !== pendingManualBoxId) {
-          appState.setSelectedBoxId(null);
-        }
-        hideBoxEditorPopover();
-        updateCanvasRender();
+        dismissBoxEditor();
         // ボックス外をクリック＆ドラッグした場合はパン移動を開始
-        isPanning = true;
-        panStartX = e.clientX;
-        panStartY = e.clientY;
-        panStartOffsetX = state.panX;
-        panStartOffsetY = state.panY;
-        renderCanvas.classList.add("is-interacting");
-        renderCanvas.style.cursor = "grabbing";
+        beginPan(e.clientX, e.clientY);
       }
     } else if (state.mode === "draw") {
-      if (!manualDrawArmed) {
-        const edge = pendingEdgeAt(x, y);
-        const pending = pendingManualBox();
-        if (edge && pending) beginEdgeAdjust(edge, pending);
-        else beginPan(e.clientX, e.clientY);
-        return;
-      }
-      isDrawing = true;
-      drawStartX = x;
-      drawStartY = y;
-      currentSnapResult = null;
-      activeSnappedLine = null;
-
-      if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
-        const snap = calculateLineSnap(
-          lastOcrResult.lines,
-          { x, y },
-          { x, y },
-          currentLineSnapOptions()
-        );
-        currentSnapResult = snap;
-        activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
-        currentDrawRect = snap.rect;
-      } else {
-        currentDrawRect = { x, y, width: 0, height: 0 };
-      }
-      updateCanvasRender();
+      beginDrawGesture(e.clientX, e.clientY, x, y);
     }
   });
 
@@ -2489,44 +2664,21 @@ function initEvents(): void {
       return;
     }
 
+    if (drawGesture) resolveDrawGesture(e.clientX, e.clientY);
+
     if (edgeAdjust) {
       applyEdgeAdjust(getCanvasCoordinates(e).x);
       return;
     }
 
     if (isPanning) {
-      const dx = e.clientX - panStartX;
-      const dy = e.clientY - panStartY;
-      appState.setPan(panStartOffsetX + dx, panStartOffsetY + dy);
-      applyCanvasTransform();
+      movePan(e.clientX, e.clientY);
       return;
     }
 
     if (!isDrawing) return;
     const { x, y } = getCanvasCoordinates(e);
-    const state = appState.getState();
-
-    if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
-      const snap = calculateLineSnap(
-        lastOcrResult.lines,
-        { x: drawStartX, y: drawStartY },
-        { x, y },
-        currentLineSnapOptions()
-      );
-      currentSnapResult = snap;
-      activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
-      currentDrawRect = snap.rect;
-    } else {
-      const minX = Math.min(drawStartX, x);
-      const minY = Math.min(drawStartY, y);
-      const width = Math.abs(x - drawStartX);
-      const height = Math.abs(y - drawStartY);
-      currentDrawRect = { x: minX, y: minY, width, height };
-      currentSnapResult = null;
-      activeSnappedLine = null;
-    }
-
-    updateCanvasRender();
+    updateManualStroke(x, y);
   });
 
   // マウスアップ（ドラッグ完了）
@@ -2540,33 +2692,36 @@ function initEvents(): void {
       return;
     }
 
+    if (drawGesture) {
+      endDrawGesture();
+      return;
+    }
+
     if (edgeAdjust) {
       endEdgeAdjust();
       return;
     }
 
-    if (isPanning) {
-      isPanning = false;
-      renderCanvas.classList.remove("is-interacting");
-      syncDrawCursor();
-    }
+    if (isPanning) endPan();
 
     if (!isDrawing) return;
-    isDrawing = false;
     finishManualStroke();
   });
 
   // タッチ操作（スマホ対応：ピンチズーム・パン・行スナップ描画）
   renderCanvas.addEventListener("touchstart", (e) => {
+    stopPanInertia();
     const state = appState.getState();
     if (!state.sourceImage) return;
 
     // 2本指ピンチ操作開始（モードに関わらず常にズーム＆パン）
     if (e.touches.length === 2) {
       e.preventDefault();
+      cancelDrawGesture();
       if (edgeAdjust) endEdgeAdjust();
       isPinching = true;
       isDrawing = false;
+      isRectDrawing = false;
       isPanning = false;
       currentDrawRect = null;
       activeSnappedLine = null;
@@ -2608,53 +2763,15 @@ function initEvents(): void {
         const box = findBoxAtPosition(state.boxes, x, y);
         if (box) {
           e.preventDefault();
-          if (pendingManualBoxId && pendingManualBoxId !== box.id) pendingManualBoxId = null;
-          appState.setSelectedBoxId(box.id);
-          showBoxEditorPopover(box);
-          updateCanvasRender();
+          openBoxEditor(box);
         } else {
-          if (appState.getState().selectedBoxId !== pendingManualBoxId) {
-            appState.setSelectedBoxId(null);
-          }
-          hideBoxEditorPopover();
-          updateCanvasRender();
+          dismissBoxEditor();
           // 何もない場所をドラッグした場合はパン移動
-          isPanning = true;
-          panStartX = touch.clientX;
-          panStartY = touch.clientY;
-          panStartOffsetX = state.panX;
-          panStartOffsetY = state.panY;
-          renderCanvas.classList.add("is-interacting");
+          beginPan(touch.clientX, touch.clientY);
         }
       } else if (state.mode === "draw") {
         e.preventDefault();
-        if (!manualDrawArmed) {
-          const edge = pendingEdgeAt(x, y);
-          const pending = pendingManualBox();
-          if (edge && pending) beginEdgeAdjust(edge, pending);
-          else beginPan(touch.clientX, touch.clientY);
-          return;
-        }
-        isDrawing = true;
-        drawStartX = x;
-        drawStartY = y;
-        currentSnapResult = null;
-        activeSnappedLine = null;
-
-        if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
-          const snap = calculateLineSnap(
-            lastOcrResult.lines,
-            { x, y },
-            { x, y },
-            currentLineSnapOptions()
-          );
-          currentSnapResult = snap;
-          activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
-          currentDrawRect = snap.rect;
-        } else {
-          currentDrawRect = { x, y, width: 0, height: 0 };
-        }
-        updateCanvasRender();
+        beginDrawGesture(touch.clientX, touch.clientY, x, y);
       }
     }
   }, { passive: false });
@@ -2694,6 +2811,11 @@ function initEvents(): void {
       return;
     }
 
+    if (drawGesture) {
+      e.preventDefault();
+      resolveDrawGesture(touch.clientX, touch.clientY);
+    }
+
     if (edgeAdjust) {
       e.preventDefault();
       applyEdgeAdjust(getCanvasCoordinates(touch).x);
@@ -2703,10 +2825,7 @@ function initEvents(): void {
     // 1本指パン移動
     if (isPanning) {
       e.preventDefault();
-      const dx = touch.clientX - panStartX;
-      const dy = touch.clientY - panStartY;
-      appState.setPan(panStartOffsetX + dx, panStartOffsetY + dy);
-      applyCanvasTransform();
+      movePan(touch.clientX, touch.clientY);
       return;
     }
 
@@ -2715,29 +2834,7 @@ function initEvents(): void {
     e.preventDefault();
 
     const { x, y } = getCanvasCoordinates(touch);
-    const state = appState.getState();
-
-    if (state.lineSnapEnabled && lastOcrResult && lastOcrResult.lines.length > 0) {
-      const snap = calculateLineSnap(
-        lastOcrResult.lines,
-        { x: drawStartX, y: drawStartY },
-        { x, y },
-        currentLineSnapOptions()
-      );
-      currentSnapResult = snap;
-      activeSnappedLine = snap.isSnapped ? snap.matchedLine : null;
-      currentDrawRect = snap.rect;
-    } else {
-      const minX = Math.min(drawStartX, x);
-      const minY = Math.min(drawStartY, y);
-      const width = Math.abs(x - drawStartX);
-      const height = Math.abs(y - drawStartY);
-      currentDrawRect = { x: minX, y: minY, width, height };
-      currentSnapResult = null;
-      activeSnappedLine = null;
-    }
-
-    updateCanvasRender();
+    updateManualStroke(x, y);
   }, { passive: false });
 
   renderCanvas.addEventListener("touchend", () => {
@@ -2754,19 +2851,26 @@ function initEvents(): void {
       return;
     }
 
+    if (drawGesture) {
+      endDrawGesture();
+      return;
+    }
+
     if (edgeAdjust) {
       endEdgeAdjust();
       return;
     }
 
-    if (isPanning) {
-      isPanning = false;
-      renderCanvas.classList.remove("is-interacting");
-    }
+    if (isPanning) endPan();
 
     if (!isDrawing) return;
-    isDrawing = false;
     finishManualStroke();
+  });
+
+  renderCanvas.addEventListener("touchcancel", () => {
+    isPinching = false;
+    activeCornerKey = null;
+    abortCanvasGesture();
   });
 
   // モバイル専用スライドアップメニューとクイック操作の初期化
