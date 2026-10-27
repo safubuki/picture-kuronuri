@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'shield.svg', 'pwa-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'KuroNuri Studio | 完全ローカル・プライバシー黒塗りカメラ',
+        name: 'KuroNuri Studio | 外部送信なし・端末内で完結する黒塗りツール',
         short_name: 'KuroNuri',
-        description: '人名・会社名・顔写真・アバター・連絡先を外部送信ゼロ（完全ローカル）で自動黒塗り・墨消しするプライバシー保護カメラ。',
+        description: '人名・会社名・顔写真・アバター・連絡先を外部送信なし（端末内完結）で自動黒塗り・墨消しするプライバシー保護ツール。',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',

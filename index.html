@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>KuroNuri Studio | 完全ローカル・プライバシー黒塗りカメラ</title>
+    <title>KuroNuri Studio | 外部送信なし・端末内で完結する黒塗りツール</title>
     <meta name="description" content="チャット画面などの写真から、人名・会社名・顔写真・アバター・連絡先を外部AIを使わずに完全ブラウザ内（端末ローカル）で自動黒塗り・墨消しするプライバシー保護ツール。" />
     
     <!-- PWA Settings -->
@@ -28,14 +28,8 @@
         </div>
         <div>
           <h1 class="brand-title">KuroNuri Studio</h1>
-          <div class="brand-subtitle">プライバシー墨消しカメラ</div>
+          <div class="brand-subtitle">外部送信なし・端末内で完結する黒塗りツール</div>
         </div>
-      </div>
-
-      <!-- Security Status Badge -->
-      <div class="security-badge" title="サーバー通信は一切行わず、すべての画像解析・黒塗り処理はあなたのブラウザ内（端末ローカル）で完結します">
-        <span class="security-dot"></span>
-        <span>100% 端末内処理・外部送信ゼロ（完全オフライン）</span>
       </div>
 
       <div class="header-actions">
@@ -196,9 +190,9 @@
                 カメラで撮影
               </button>
             </div>
-            <div style="margin-top: 1.25rem; font-size: 0.78rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 0.35rem; align-items: center;">
+            <div class="drop-zone-hints">
               <span>※ Ctrl+V（貼り付け）でも即座に画像を読み込めます</span>
-              <span style="font-size: 0.74rem; color: var(--text-muted);">動作テスト用画像は右上の<b>「サンプル ▾」</b>から読み込めます</span>
+              <span class="drop-zone-subhint">動作テスト用画像は右上の<b>「サンプル ▾」</b>から読み込めます</span>
             </div>
           </div>
 
@@ -345,7 +339,7 @@
             <span>エクスポート</span>
             <span class="panel-badge">安全・端末内完結</span>
           </div>
-          <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.85rem; line-height: 1.4;">
+          <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 0.85rem; line-height: 1.45;">
             黒塗り処理済みの画像や伏字テキストをワンクリックでコピーし、安全に共有・AI相談できます。
           </p>
 
@@ -359,26 +353,26 @@
 
           <!-- 伏字テキスト抽出（AI相談用） -->
           <div style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 0.75rem;">
-            <div style="font-size: 0.78rem; font-weight: 600; color: #93c5fd; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
+            <div style="font-size: 0.84rem; font-weight: 600; color: #93c5fd; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
               <span>AI相談用テキスト (伏字化)</span>
-              <span id="redactedModeBadge" style="font-size: 0.68rem; background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 500;">外部送信安全</span>
+              <span id="redactedModeBadge" style="font-size: 0.72rem; background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 500;">外部送信安全</span>
             </div>
-            <p id="redactedDescText" style="font-size: 0.73rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.35;">
+            <p id="redactedDescText" style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.5rem; line-height: 1.4;">
               個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> などに置換。画像より高速・安全にAIへ質問できます。
             </p>
             <div id="redactedActionGroup" style="display: flex; gap: 0.4rem; margin-bottom: 0.55rem;">
-              <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600; font-size: 0.76rem; padding: 0.42rem 0.4rem;">
+              <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600; font-size: 0.82rem; padding: 0.48rem 0.5rem;">
                 📋 伏字テキストをコピー
               </button>
-              <button id="btnAiCleanRedactText" class="btn btn-primary" style="display: none; flex: 1.15; font-size: 0.76rem; padding: 0.42rem 0.4rem; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border: none; font-weight: 600; box-shadow: 0 2px 6px rgba(139, 92, 246, 0.25);" title="文字化けや誤字を文脈から補正し、自然な日本語文章に清書・伏字化します">
+              <button id="btnAiCleanRedactText" class="btn btn-primary" style="display: none; flex: 1.15; font-size: 0.82rem; padding: 0.48rem 0.5rem; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border: none; font-weight: 600; box-shadow: 0 2px 6px rgba(139, 92, 246, 0.25);" title="文字化けや誤字を文脈から補正し、自然な日本語文章に清書・伏字化します">
                 🤖 AIで文章清書
               </button>
             </div>
-            <details id="detailsRedactedText" open style="font-size: 0.75rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.35rem 0.5rem; border: 1px solid rgba(255, 255, 255, 0.06);">
+            <details id="detailsRedactedText" open style="font-size: 0.8rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.4rem 0.55rem; border: 1px solid rgba(255, 255, 255, 0.06);">
               <summary style="cursor: pointer; color: var(--text-muted); font-weight: 500; user-select: none; margin-bottom: 0.2rem;">
                 伏字テキストをプレビュー
               </summary>
-              <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 110px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.72rem; padding: 0.4rem; resize: vertical; box-sizing: border-box;" placeholder="黒塗りした部分が、ここに伏字として出ます"></textarea>
+              <textarea id="txtRedactedPreview" readonly style="width: 100%; height: 110px; margin-top: 0.35rem; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; font-family: monospace; font-size: 0.78rem; padding: 0.45rem; resize: vertical; box-sizing: border-box;" placeholder="黒塗りした部分が、ここに伏字として出ます"></textarea>
             </details>
           </div>
         </div>
@@ -407,10 +401,10 @@
               <span id="statPii" class="stat-val">0</span>
             </div>
           </div>
-          <div style="font-size: 0.72rem; color: var(--text-dim); text-align: center;">
+          <div style="font-size: 0.78rem; color: var(--text-dim); text-align: center;">
             ※ 画面上の黒塗りをタップすると個別に編集・解除できます
           </div>
-          <div id="llmDetectionStatus" role="status" aria-live="polite" style="font-size: 0.72rem; color: var(--text-dim); margin-top: 0.6rem; line-height: 1.5;">AI文脈判定: OFF（ルール判定）</div>
+          <div id="llmDetectionStatus" role="status" aria-live="polite" style="font-size: 0.78rem; color: var(--text-dim); margin-top: 0.6rem; line-height: 1.5;">AI文脈判定: OFF（ルール判定）</div>
         </div>
 
         <!-- 3. Secondary Toolset: Collapsible Accordions (Quiet by default) -->
@@ -418,11 +412,11 @@
         <!-- Accordion A: Camera Distortion & Enhancement -->
         <details id="cardDistortion" class="panel-card panel-accordion">
           <summary class="accordion-summary">
-            <span class="accordion-title">写真補正ツール</span>
+            <span class="accordion-title">写真補正</span>
             <span class="accordion-chevron">▼</span>
           </summary>
           <div class="accordion-body">
-            <p style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.75rem; line-height: 1.4;">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem; line-height: 1.45;">
               写真の傾きや台形を直すときだけ使います。画面キャプチャはそのまま黒塗りできます。
             </p>
             <!-- Hidden backward-compatible hooks -->
