@@ -563,6 +563,9 @@ body::before {
 }
 
 .popover-step-btn {
+  flex: 0 0 4.6rem;
+  text-align: center;
+  white-space: nowrap;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: #e2e8f0;
@@ -1781,6 +1784,7 @@ input:checked + .slider:before {
   }
 
   .box-editor-popover.is-docked .popover-step-btn {
+    flex-basis: 4.2rem;
     padding: 0.14rem 0.5rem;
     font-size: 0.66rem;
   }
