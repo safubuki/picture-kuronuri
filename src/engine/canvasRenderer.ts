@@ -215,7 +215,7 @@ function renderInlineBoxLabel(
   const fontSize = Math.max(12, Math.min(18, Math.floor(bh * 0.78)));
   ctx.font = `600 ${fontSize}px sans-serif`;
 
-  const label = getCompactLabel(box.type, box.label);
+  const label = fitLabelToWidth(ctx, getCompactLabel(box.type, box.label), bw - Math.max(6, fontSize * 0.5));
 
   // 文字色の決定（黒塗り/モザイク/ぼかしなら淡いグレー/白、白塗りなら濃いスレートグレー）
   let textColor = "rgba(255, 255, 255, 0.88)";
@@ -252,6 +252,19 @@ function renderInlineBoxLabel(
 }
 
 /**
+ * 黒塗りの幅に収まらないときだけ、末尾を「…」で省略する
+ */
+function fitLabelToWidth(ctx: CanvasRenderingContext2D, label: string, maxWidth: number): string {
+  if (ctx.measureText(label).width <= maxWidth) return label;
+  const chars = Array.from(label);
+  for (let n = chars.length - 1; n >= 1; n--) {
+    const candidate = chars.slice(0, n).join("") + "…";
+    if (ctx.measureText(candidate).width <= maxWidth) return candidate;
+  }
+  return chars[0] + "…";
+}
+
+/**
  * 矩形幅に無理なく収まる簡潔な日本語ラベル
  */
 function getCompactLabel(type: RedactType, defaultLabel: string): string {
@@ -266,8 +279,8 @@ function getCompactLabel(type: RedactType, defaultLabel: string): string {
     if (clean === "人名" || clean.includes("人名")) return "人名";
     if (clean === "金額" || clean.includes("金額")) return "金額";
     if (clean !== "手動") {
-      // ユーザーの自由カスタム入力（長すぎる場合は省略）
-      return clean.length > 5 ? clean.slice(0, 4) + "…" : clean;
+      // ユーザーの自由カスタム入力（収まらない分は描画時に省略する）
+      return clean;
     }
   }
 

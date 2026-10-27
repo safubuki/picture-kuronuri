@@ -98,6 +98,10 @@ const btnPopoverToggle = document.getElementById("btnPopoverToggle") as HTMLButt
 const popoverToggleText = document.getElementById("popoverToggleText") as HTMLSpanElement;
 const btnPopoverDelete = document.getElementById("btnPopoverDelete") as HTMLButtonElement;
 const btnPopoverConfirm = document.getElementById("btnPopoverConfirm") as HTMLButtonElement;
+const btnPopoverThinner = document.getElementById("btnPopoverThinner") as HTMLButtonElement;
+const btnPopoverThicker = document.getElementById("btnPopoverThicker") as HTMLButtonElement;
+const btnPopoverMoveUp = document.getElementById("btnPopoverMoveUp") as HTMLButtonElement;
+const btnPopoverMoveDown = document.getElementById("btnPopoverMoveDown") as HTMLButtonElement;
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -1250,6 +1254,38 @@ function applyEdgeAdjust(canvasX: number): void {
   if (updated && appState.getState().selectedBoxId === updated.id) showBoxEditorPopover(updated, true);
 }
 
+/** 選んでいる黒塗りの上下だけを置き換える。横の位置と長さはそのまま。 */
+function updateSelectedBoxVertical(next: (rect: RedactBox["rect"]) => { y: number; height: number }): void {
+  const state = appState.getState();
+  const box = state.boxes.find((item) => item.id === state.selectedBoxId);
+  if (!box) return;
+  const { y, height } = next(box.rect);
+  const nextHeight = Math.max(4, Math.min(renderCanvas.height, height));
+  const nextY = Math.max(0, Math.min(renderCanvas.height - nextHeight, y));
+  if (Math.abs(nextY - box.rect.y) < 0.5 && Math.abs(nextHeight - box.rect.height) < 0.5) return;
+  appState.updateBox(box.id, { rect: { ...box.rect, y: nextY, height: nextHeight } });
+  updateCanvasRender();
+  refreshRedactedTextPreview(true);
+  const updated = appState.getState().boxes.find((item) => item.id === box.id);
+  if (updated) showBoxEditorPopover(updated, true);
+}
+
+/** 太さを一段階変える。上下の中心は保つので、隠したい側へは位置の調整でずらす。 */
+function adjustBoxThickness(direction: 1 | -1): void {
+  updateSelectedBoxVertical(({ y, height }) => {
+    const nextHeight = Math.max(4, height + Math.max(1, Math.round(height * 0.12)) * direction);
+    return { y: y + (height - nextHeight) / 2, height: nextHeight };
+  });
+}
+
+/** 線を上下にずらす。行が広く検出されたとき、隠したい文字の側へ寄せる。 */
+function moveBoxVertically(direction: 1 | -1): void {
+  updateSelectedBoxVertical(({ y, height }) => ({
+    y: y + Math.max(1, Math.round(height * 0.12)) * direction,
+    height
+  }));
+}
+
 function endEdgeAdjust(): void {
   const box = edgeAdjustBox();
   const changed = edgeAdjustChanged;
@@ -1923,6 +1959,11 @@ function initEvents(): void {
         }
       });
     }
+
+    btnPopoverThinner?.addEventListener("click", () => adjustBoxThickness(-1));
+    btnPopoverThicker?.addEventListener("click", () => adjustBoxThickness(1));
+    btnPopoverMoveUp?.addEventListener("click", () => moveBoxVertically(-1));
+    btnPopoverMoveDown?.addEventListener("click", () => moveBoxVertically(1));
 
     // 保護の一時解除/再適用
     if (btnPopoverToggle) {

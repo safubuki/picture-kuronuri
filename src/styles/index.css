@@ -549,6 +549,37 @@ body::before {
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
 }
 
+.popover-thickness-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+
+.popover-thickness-label {
+  flex: 1;
+  font-size: 0.72rem;
+  color: #cbd5e1;
+}
+
+.popover-step-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+  padding: 0.22rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  user-select: none;
+}
+
+.popover-step-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+}
+
 .popover-draft-hint {
   margin: 0 0 0.45rem;
   font-size: 0.68rem;
@@ -1743,6 +1774,15 @@ input:checked + .slider:before {
   .box-editor-popover.is-docked .popover-input {
     padding: 0.18rem 0.4rem;
     font-size: 0.68rem;
+  }
+
+  .box-editor-popover.is-docked .popover-thickness-row {
+    margin-bottom: 0.24rem;
+  }
+
+  .box-editor-popover.is-docked .popover-step-btn {
+    padding: 0.14rem 0.5rem;
+    font-size: 0.66rem;
   }
 
   .box-editor-popover.is-docked .popover-draft-hint {
