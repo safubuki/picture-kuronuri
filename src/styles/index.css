@@ -1799,11 +1799,28 @@ input:checked + .slider:before {
 
 @media (max-width: 680px) {
   /* Header Mobile Optimization */
+  /* タイトルとボタン類を1行に収め、ボタンは右上に固定 */
   .app-header {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     padding: 0.45rem 0.65rem;
-    gap: 0.35rem 0.5rem;
+    gap: 0.5rem;
     overflow-x: clip;
+  }
+
+  .brand {
+    flex-shrink: 1;
+    min-width: 0;
+    gap: 0.45rem;
+  }
+
+  .brand > div:last-child {
+    min-width: 0;
+  }
+
+  .brand-title,
+  .brand-subtitle {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .brand-title {
@@ -1925,6 +1942,45 @@ input:checked + .slider:before {
 
   .brand-title {
     font-size: 0.95rem;
+  }
+
+  .brand-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .app-header {
+    gap: 0.35rem;
+  }
+
+  .header-actions {
+    gap: 0.25rem;
+  }
+
+  .header-actions .btn-sm,
+  .mobile-header-menu-btn {
+    padding: 0.35rem 0.45rem;
+    font-size: 0.72rem;
+  }
+
+  #btnNewPhotoHeader {
+    padding: 0.35rem 0.5rem;
+    font-size: 0.74rem;
+  }
+
+  /* 狭い画面ではカメラアイコンを省き、タイトル領域を確保 */
+  #btnNewPhotoHeader svg {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand-title {
+    font-size: 0.86rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.58rem;
   }
 }
 
