@@ -1980,7 +1980,15 @@ input:checked + .slider:before {
   }
 
   .brand-subtitle {
-    font-size: 0.58rem;
+    font-size: 0.55rem;
+    letter-spacing: -0.02em;
+  }
+
+  .header-actions .btn-sm,
+  .mobile-header-menu-btn,
+  #btnNewPhotoHeader {
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
   }
 }
 
