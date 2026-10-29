@@ -205,6 +205,9 @@ function renderInlineBoxLabel(
 ): void {
   const { x, y, width: bw, height: bh } = box.rect;
 
+  // ラベルが空なら文字を載せず、黒塗りだけにする
+  if (!(box.label || "").trim()) return;
+
   ctx.save();
   // 矩形内部に厳密にクリッピング（上下左右への飛び出しを1pxも許さない）
   ctx.beginPath();
@@ -212,7 +215,8 @@ function renderInlineBoxLabel(
   ctx.clip();
 
   // 枠の高さに合わせたフォントサイズ（黒塗りバーの中で読める大きさ）
-  const fontSize = Math.max(12, Math.min(18, Math.floor(bh * 0.78)));
+  const baseFontSize = Math.max(12, Math.min(18, Math.floor(bh * 0.78)));
+  const fontSize = Math.max(6, Math.round(baseFontSize * (box.labelScale ?? 1)));
   ctx.font = `600 ${fontSize}px sans-serif`;
 
   const label = fitLabelToWidth(ctx, getCompactLabel(box.type, box.label), bw - Math.max(6, fontSize * 0.5));

@@ -47,7 +47,7 @@ function getPlaceholder(box: RedactBox): string {
       if (box.label.includes("パスワード") || box.label.includes("PW")) return "[パスワード]";
       if (box.label.includes("カード")) return "[カード情報]";
       if (box.label.includes("金額")) return "[金額]";
-      return `[${box.label}]`;
+      return box.label.trim() ? `[${box.label}]` : "[非公開]";
     case "custom":
       return `[伏字: ${box.text || "非公開"}]`;
     default:

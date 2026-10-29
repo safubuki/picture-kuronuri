@@ -31,6 +31,7 @@ export interface RedactBox {
     height: number;
   };
   rotation?: number; // 傾き角度（度数法、例: 3.5度）
+  labelScale?: number; // ラベル文字サイズの倍率（未指定は1。枠の高さから決まる基準サイズに掛ける）
   enabled: boolean;
   confidence?: number;
   isManual?: boolean;

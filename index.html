@@ -218,6 +218,7 @@
               <button type="button" class="popover-chip" data-label="金額">💴 金額</button>
               <button type="button" class="popover-chip" data-label="ファイルパス">📁 ファイルパス</button>
               <button type="button" class="popover-chip" data-label="手動">✍️ 手動</button>
+              <button type="button" class="popover-chip" data-label="" title="文字を入れず、黒塗りだけにする">⬛ 文字なし</button>
             </div>
             <div class="popover-custom-row">
               <input type="text" id="popoverCustomLabel" class="popover-input" placeholder="自由入力 (例: 社内ID, 案件名)" maxlength="16" />
@@ -231,6 +232,11 @@
               <span class="popover-thickness-label">線の位置</span>
               <button type="button" id="btnPopoverMoveUp" class="popover-step-btn" title="線を上へずらす">↑ 上へ</button>
               <button type="button" id="btnPopoverMoveDown" class="popover-step-btn" title="線を下へずらす">↓ 下へ</button>
+            </div>
+            <div class="popover-thickness-row">
+              <span class="popover-thickness-label">文字サイズ</span>
+              <button type="button" id="btnPopoverFontSmaller" class="popover-step-btn" title="ラベルの文字を小さくする">− 小さく</button>
+              <button type="button" id="btnPopoverFontLarger" class="popover-step-btn" title="ラベルの文字を大きくする">＋ 大きく</button>
             </div>
             <p id="popoverDraftHint" class="popover-draft-hint">両端の丸をドラッグすると長さを変えられます。</p>
             <button type="button" id="btnPopoverConfirm" class="btn btn-sm btn-primary btn-block popover-confirm-btn">確定</button>

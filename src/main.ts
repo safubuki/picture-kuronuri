@@ -102,6 +102,8 @@ const btnPopoverThinner = document.getElementById("btnPopoverThinner") as HTMLBu
 const btnPopoverThicker = document.getElementById("btnPopoverThicker") as HTMLButtonElement;
 const btnPopoverMoveUp = document.getElementById("btnPopoverMoveUp") as HTMLButtonElement;
 const btnPopoverMoveDown = document.getElementById("btnPopoverMoveDown") as HTMLButtonElement;
+const btnPopoverFontSmaller = document.getElementById("btnPopoverFontSmaller") as HTMLButtonElement;
+const btnPopoverFontLarger = document.getElementById("btnPopoverFontLarger") as HTMLButtonElement;
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -1080,7 +1082,7 @@ function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
   const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
   chips.forEach((chip) => {
     const chipLabel = chip.getAttribute("data-label");
-    chip.classList.toggle("active", chipLabel === box.label);
+    chip.classList.toggle("active", chipLabel === (box.label ?? ""));
   });
 }
 
@@ -1284,6 +1286,22 @@ function moveBoxVertically(direction: 1 | -1): void {
     y: y + Math.max(1, Math.round(height * 0.12)) * direction,
     height
   }));
+}
+
+const LABEL_SCALE_MIN = 0.4;
+const LABEL_SCALE_MAX = 1.6;
+const LABEL_SCALE_STEP = 0.1;
+
+/** ラベル文字の大きさを一段階変える。基準サイズ（枠の高さから自動算出）への倍率として保持する。 */
+function adjustBoxLabelScale(direction: 1 | -1): void {
+  const state = appState.getState();
+  const box = state.boxes.find((item) => item.id === state.selectedBoxId);
+  if (!box) return;
+  const current = box.labelScale ?? 1;
+  const next = Math.round(Math.max(LABEL_SCALE_MIN, Math.min(LABEL_SCALE_MAX, current + LABEL_SCALE_STEP * direction)) * 10) / 10;
+  if (next === current) return;
+  appState.updateBox(box.id, { labelScale: next });
+  updateCanvasRender();
 }
 
 function endEdgeAdjust(): void {
@@ -1600,7 +1618,7 @@ function syncUiWithState(state: AppState): void {
 
       const badge = document.createElement("span");
       badge.className = `item-badge ${box.type}`;
-      badge.textContent = box.label;
+      badge.textContent = box.label || "文字なし";
 
       const textSpan = document.createElement("span");
       textSpan.textContent = box.text ? `"${box.text}"` : box.reason;
@@ -1943,10 +1961,11 @@ function initEvents(): void {
       chip.addEventListener("click", () => {
         const label = chip.getAttribute("data-label");
         const state = appState.getState();
-        if (!state.selectedBoxId || !label) return;
+        if (!state.selectedBoxId || label === null) return;
 
-        appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label})` });
-        showToast(`🏷️ ラベルを「${label}」に設定しました`);
+        // 空のラベルは「文字なし（黒塗りのみ）」
+        appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label || "文字なし"})` });
+        showToast(label ? `🏷️ ラベルを「${label}」に設定しました` : "🏷️ 文字なし（黒塗りのみ）に設定しました");
         closeBoxEditor();
       });
     });
@@ -1964,6 +1983,8 @@ function initEvents(): void {
     btnPopoverThicker?.addEventListener("click", () => adjustBoxThickness(1));
     btnPopoverMoveUp?.addEventListener("click", () => moveBoxVertically(-1));
     btnPopoverMoveDown?.addEventListener("click", () => moveBoxVertically(1));
+    btnPopoverFontSmaller?.addEventListener("click", () => adjustBoxLabelScale(-1));
+    btnPopoverFontLarger?.addEventListener("click", () => adjustBoxLabelScale(1));
 
     // 保護の一時解除/再適用
     if (btnPopoverToggle) {
@@ -1983,11 +2004,12 @@ function initEvents(): void {
     if (btnPopoverConfirm) {
       btnPopoverConfirm.addEventListener("click", () => {
         const state = appState.getState();
-        const typed = popoverCustomLabel?.value.trim();
-        if (state.selectedBoxId && typed) {
+        // 入力欄を空にした場合も、そのまま「文字なし（黒塗りのみ）」として確定する
+        const typed = popoverCustomLabel?.value.trim() ?? "";
+        if (state.selectedBoxId) {
           const current = state.boxes.find((box) => box.id === state.selectedBoxId);
-          if (current && current.label !== typed) {
-            appState.updateBox(state.selectedBoxId, { label: typed, reason: `ユーザー指定 (${typed})` });
+          if (current && (current.label ?? "") !== typed) {
+            appState.updateBox(state.selectedBoxId, { label: typed, reason: `ユーザー指定 (${typed || "文字なし"})` });
           }
         }
         if (!appState.getState().selectedBoxId) return;
