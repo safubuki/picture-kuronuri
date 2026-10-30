@@ -1078,11 +1078,15 @@ function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
     popoverToggleText.textContent = box.enabled ? "保護を一時解除" : "保護を再適用";
   }
 
-  // チップのアクティブ状態の同期
+  syncPopoverChips(box.label ?? "");
+}
+
+/** 入力中のラベルに一致するチップだけを選択状態にする。 */
+function syncPopoverChips(label: string): void {
+  if (!boxEditorPopover) return;
   const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
   chips.forEach((chip) => {
-    const chipLabel = chip.getAttribute("data-label");
-    chip.classList.toggle("active", chipLabel === (box.label ?? ""));
+    chip.classList.toggle("active", chip.getAttribute("data-label") === label);
   });
 }
 
@@ -1268,8 +1272,24 @@ function updateSelectedBoxVertical(next: (rect: RedactBox["rect"]) => { y: numbe
   appState.updateBox(box.id, { rect: { ...box.rect, y: nextY, height: nextHeight } });
   updateCanvasRender();
   refreshRedactedTextPreview(true);
+  // 編集パネルは基本動かさない。連打中にボタンの位置がずれて押せなくなるのを防ぐ。
+  // ただし黒塗りがパネルの下に隠れるときだけ、見える位置へ置き直す。
   const updated = appState.getState().boxes.find((item) => item.id === box.id);
-  if (updated) showBoxEditorPopover(updated, true);
+  if (updated && isBoxHiddenByPopover(updated)) showBoxEditorPopover(updated, true);
+}
+
+/** 黒塗りが編集パネルと重なって隠れているか（画面上の位置で判定）。 */
+function isBoxHiddenByPopover(box: RedactBox): boolean {
+  if (!boxEditorPopover || boxEditorPopover.style.display === "none" || !renderCanvas) return false;
+  const cRect = renderCanvas.getBoundingClientRect();
+  const pRect = boxEditorPopover.getBoundingClientRect();
+  const scaleX = cRect.width / (renderCanvas.width || 1);
+  const scaleY = cRect.height / (renderCanvas.height || 1);
+  const left = cRect.left + box.rect.x * scaleX;
+  const top = cRect.top + box.rect.y * scaleY;
+  const right = left + box.rect.width * scaleX;
+  const bottom = top + box.rect.height * scaleY;
+  return left < pRect.right && right > pRect.left && top < pRect.bottom && bottom > pRect.top;
 }
 
 /** 太さを一段階変える。上下の中心は保つので、隠したい側へは位置の調整でずらす。 */
@@ -1954,23 +1974,21 @@ function initEvents(): void {
 
 
 
-  // ポップオーバーのチップ選択
+  // ポップオーバーのチップ選択。選ぶだけで、反映は「確定」を押したとき。
   if (boxEditorPopover) {
     const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
     chips.forEach((chip) => {
       chip.addEventListener("click", () => {
         const label = chip.getAttribute("data-label");
-        const state = appState.getState();
-        if (!state.selectedBoxId || label === null) return;
-
+        if (!appState.getState().selectedBoxId || label === null || !popoverCustomLabel) return;
         // 空のラベルは「文字なし（黒塗りのみ）」
-        appState.updateBox(state.selectedBoxId, { label, reason: `ユーザー指定 (${label || "文字なし"})` });
-        showToast(label ? `🏷️ ラベルを「${label}」に設定しました` : "🏷️ 文字なし（黒塗りのみ）に設定しました");
-        closeBoxEditor();
+        popoverCustomLabel.value = label;
+        syncPopoverChips(label);
       });
     });
 
     if (popoverCustomLabel) {
+      popoverCustomLabel.addEventListener("input", () => syncPopoverChips(popoverCustomLabel.value.trim()));
       popoverCustomLabel.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
