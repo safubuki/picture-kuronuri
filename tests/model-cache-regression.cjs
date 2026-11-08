@@ -11,173 +11,140 @@ require.extensions['.ts'] = (loaded, filename) => {
 };
 
 const { ModelCacheManager } = require('../src/engine/modelCache.ts');
-const { LOCAL_LLM_MODEL_ID } = require('../src/engine/localLlmConfig.ts');
 
-const APP_CACHE = 'kuronuri-models-cache-v1';
-const TF_CACHE = 'transformers-cache';
-const WEIGHT_BYTES = 570_000_000;
-const modelUrl = (file, revision = 'main', id = LOCAL_LLM_MODEL_ID) =>
-  `https://huggingface.co/${id}/resolve/${revision}/${file}`;
+// tesseract.js（idb-keyval）が使う IndexedDB の最小限の代替。
+// 成功イベントは実ブラウザと同様に非同期タスクで通知する。
+function createFakeIndexedDb() {
+  const databases = new Map();
+  const later = (fn) => setTimeout(fn, 0);
 
-class MemoryCache {
-  entries = new Map();
-  async keys() { return [...this.entries.keys()].map((url) => new Request(url)); }
-  async match(key) { return this.entries.get(typeof key === 'string' ? key : key.url); }
-  async put(key, response) { this.entries.set(typeof key === 'string' ? key : key.url, response); }
-  async delete(key) { return this.entries.delete(typeof key === 'string' ? key : key.url); }
-}
-
-let cacheMap;
-function resetCache() {
-  cacheMap = new Map();
-  global.window = { caches: true };
-  global.caches = {
-    open: async (name) => {
-      if (!cacheMap.has(name)) cacheMap.set(name, new MemoryCache());
-      return cacheMap.get(name);
-    },
-    delete: async (name) => cacheMap.delete(name)
-  };
-}
-
-// 大容量モデルをダウンロードせず、Cache API のレスポンス情報を再現する。
-async function cachedFile(url, size = 100, { cacheName = TF_CACHE, status = 200, headers = {} } = {}) {
-  const response = {
-    status,
-    headers: new Headers({ 'content-length': String(size), ...headers }),
-    clone() { return this; },
-    blob: async () => ({ size })
-  };
-  await (await caches.open(cacheName)).put(url, response);
-}
-
-async function metadata({ revision = 'main', id = LOCAL_LLM_MODEL_ID, cacheName = TF_CACHE } = {}) {
-  for (const file of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
-    await cachedFile(modelUrl(file, revision, id), 100, { cacheName });
+  function makeRequest(tx, run) {
+    const request = { result: undefined, error: null, onsuccess: null, onerror: null };
+    if (tx) tx.pending++;
+    later(() => {
+      request.result = run();
+      request.onsuccess?.();
+      if (tx) tx.finish();
+    });
+    return request;
   }
+
+  function makeDb(name) {
+    const stores = databases.get(name);
+    return {
+      objectStoreNames: { contains: (store) => stores.has(store) },
+      createObjectStore: (store) => { stores.set(store, new Map()); },
+      close() {},
+      transaction(storeName) {
+        const tx = {
+          pending: 0,
+          oncomplete: null,
+          onerror: null,
+          onabort: null,
+          finish() {
+            this.pending--;
+            later(() => { if (this.pending === 0) this.oncomplete?.(); });
+          },
+          objectStore() {
+            const data = stores.get(storeName);
+            return {
+              getAllKeys: () => makeRequest(tx, () => [...data.keys()]),
+              get: (key) => makeRequest(tx, () => data.get(key)),
+              delete: (key) => makeRequest(tx, () => { data.delete(key); })
+            };
+          }
+        };
+        return tx;
+      }
+    };
+  }
+
+  return {
+    databases,
+    open(name) {
+      const request = { result: undefined, onupgradeneeded: null, onsuccess: null, onerror: null, onblocked: null };
+      later(() => {
+        const isNew = !databases.has(name);
+        if (isNew) databases.set(name, new Map());
+        request.result = makeDb(name);
+        if (isNew) request.onupgradeneeded?.();
+        request.onsuccess?.();
+      });
+      return request;
+    }
+  };
+}
+
+function seed(fakeDb, entries) {
+  fakeDb.databases.set('keyval-store', new Map([['keyval', new Map(entries)]]));
 }
 
 let passed = 0;
-async function test(name, run) {
-  resetCache();
+async function test(name, fn) {
   try {
-    await run();
+    global.indexedDB = createFakeIndexedDb();
+    await fn(global.indexedDB);
     passed++;
-    process.stdout.write(`ok - ${name}\n`);
+    process.stdout.write('.');
   } catch (error) {
-    process.stderr.write(`not ok - ${name}\n${error.stack || error}\n`);
     process.exitCode = 1;
+    console.error(`\nFAIL: ${name}`);
+    console.error(error);
   }
 }
 
 (async () => {
-  await test('旧 Qwen2.5 だけでは Qwen3 を保存済みにしない', async () => {
-    const id = 'onnx-community/Qwen2.5-0.5B-Instruct';
-    await metadata({ id });
-    await cachedFile(modelUrl('onnx/model_q4.onnx', 'main', id), 786_000_000);
+  await test('未取得なら0件を返し、tesseract.js が保存できるようにストアを作成する', async (fakeDb) => {
     const stats = await ModelCacheManager.getCacheStorageStats();
-    assert.equal(stats.models.llm.isCached, false);
-    assert.equal(stats.models.llm.sizeBytes, 786_000_300);
-    assert.equal(stats.itemsCount, 4);
-    assert.equal((await (await caches.open(TF_CACHE)).keys()).length, 4);
+    assert.equal(stats.totalBytes, 0);
+    assert.equal(stats.itemsCount, 0);
+    assert.equal(stats.models.ocr.isCached, false);
+    assert.deepEqual(stats.models.ocr.languages, []);
+    assert.equal(fakeDb.databases.get('keyval-store').has('keyval'), true);
   });
 
-  await test('設定・トークナイザーだけ取得した失敗状態を保存済みにしない', async () => {
-    await metadata();
-    assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-  });
-
-  await test('重みだけでは必要な設定不足として保存済みにしない', async () => {
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx'), WEIGHT_BYTES);
-    assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-  });
-
-  await test('重みのダウンロード失敗後も未保存のままにする', async () => {
-    await metadata();
-    const originalFetch = global.fetch;
-    global.fetch = async () => new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]));
-        controller.error(new Error('Download interrupted'));
-      }
-    }), { headers: { 'content-length': String(WEIGHT_BYTES) } });
-    try {
-      await assert.rejects(ModelCacheManager.fetchAndCache(modelUrl('onnx/model_q4f16.onnx')), /Download interrupted/);
-      assert.equal(await ModelCacheManager.has(modelUrl('onnx/model_q4f16.onnx')), false);
-      assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-    } finally {
-      global.fetch = originalFetch;
-    }
-  });
-
-  for (const [name, options, size] of [
-    ['空ファイル', {}, 0],
-    ['小さな途中ファイル', {}, 100],
-    ['206 部分レスポンス', { status: 206 }, WEIGHT_BYTES],
-    ['Content-Range 付きレスポンス', { headers: { 'content-range': 'bytes 0-569999999/919000000' } }, WEIGHT_BYTES],
-    ['エラーレスポンス', { status: 500 }, WEIGHT_BYTES]
-  ]) {
-    await test(`${name}を保存済みにしない`, async () => {
-      await metadata();
-      await cachedFile(modelUrl('onnx/model_q4f16.onnx'), size, options);
-      assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-    });
-  }
-
-  for (const file of ['onnx/model_q4f16.onnx', 'onnx/model_q4.onnx']) {
-    await test(`${file} と必須ファイルの保存を認識する`, async () => {
-      await metadata();
-      await cachedFile(modelUrl(file), WEIGHT_BYTES);
-      assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, true);
-    });
-  }
-
-  await test('別モデル・別配布元・類似ファイル名を現在モデルと混同しない', async () => {
-    await metadata({ id: 'someone-else/Qwen3-0.6B-ONNX' });
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx', 'main', 'someone-else/Qwen3-0.6B-ONNX'), WEIGHT_BYTES);
-    await metadata();
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx_data'), WEIGHT_BYTES);
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx').replace('huggingface.co', 'example.com'), WEIGHT_BYTES);
-    await cachedFile(`https://example.com/file?url=${modelUrl('onnx/model_q4f16.onnx')}`, WEIGHT_BYTES);
-    assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-  });
-
-  await test('異なる revision の設定と重みを合成して保存済みにしない', async () => {
-    await metadata({ revision: 'old-commit' });
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx', 'new-commit'), WEIGHT_BYTES);
-    assert.equal((await ModelCacheManager.getCacheStorageStats()).models.llm.isCached, false);
-  });
-
-  await test('同じモデルを二つのキャッシュに分けて保存しても認識する', async () => {
-    await metadata({ cacheName: APP_CACHE });
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx'), WEIGHT_BYTES);
+  await test('日本語・英語の両方があれば保存済みとし、容量を合算する', async (fakeDb) => {
+    seed(fakeDb, [
+      ['./jpn.traineddata', new Uint8Array(3_000)],
+      ['./eng.traineddata', new Uint8Array(5_000)],
+      ['unrelated-key', new Uint8Array(9_999)]
+    ]);
     const stats = await ModelCacheManager.getCacheStorageStats();
-    assert.equal(stats.models.llm.isCached, true);
-    assert.equal(stats.itemsCount, 4);
-    assert.equal(stats.totalBytes, WEIGHT_BYTES + 300);
+    assert.equal(stats.models.ocr.isCached, true);
+    assert.equal(stats.models.ocr.sizeBytes, 8_000);
+    assert.equal(stats.totalBytes, 8_000);
+    assert.equal(stats.itemsCount, 2);
+    assert.deepEqual([...stats.models.ocr.languages].sort(), ['eng', 'jpn']);
   });
 
-  await test('旧新の LLM は共存でき、LLM 削除で OCR・NER を保持する', async () => {
-    await metadata();
-    await cachedFile(modelUrl('onnx/model_q4f16.onnx'), WEIGHT_BYTES);
-    await cachedFile(modelUrl('onnx/model_q4.onnx', 'main', 'onnx-community/Qwen2.5-0.5B-Instruct'), 786_000_000);
-    await cachedFile(modelUrl('generation_config.json', 'main', 'onnx-community/Qwen2.5-0.5B-Instruct'), 100);
-    const ocrUrl = 'https://example.com/tesseract/jpn.traineddata';
-    const nerUrl = 'https://huggingface.co/onnx-community/bert-ner/resolve/main/model.onnx';
-    await cachedFile(ocrUrl, 5_000_000, { cacheName: APP_CACHE });
-    await cachedFile(nerUrl, 1_000_000);
-    const before = await ModelCacheManager.getCacheStorageStats();
-    assert.equal(before.models.llm.isCached, true);
-    assert.equal(before.models.llm.sizeBytes, WEIGHT_BYTES + 786_000_400);
-    assert.equal(await ModelCacheManager.clearCategory('llm'), 6);
-    const after = await ModelCacheManager.getCacheStorageStats();
-    assert.equal(after.models.llm.isCached, false);
-    assert.equal(after.models.llm.sizeBytes, 0);
-    assert.equal(after.models.ocr.isCached, true);
-    assert.equal(after.models.ner.isCached, true);
-    assert.equal(after.totalBytes, 6_000_000);
-    assert.equal(after.itemsCount, 2);
+  await test('片方の言語しかなければ保存済みにしない', async (fakeDb) => {
+    seed(fakeDb, [['./jpn.traineddata', new Uint8Array(3_000)]]);
+    const stats = await ModelCacheManager.getCacheStorageStats();
+    assert.equal(stats.models.ocr.isCached, false);
+    assert.deepEqual(stats.models.ocr.languages, ['jpn']);
+    assert.equal(stats.models.ocr.sizeBytes, 3_000);
   });
 
-  process.stdout.write(`model cache regression: ${passed} passed\n`);
+  await test('削除はOCR言語データだけを消し、他のキーは残す', async (fakeDb) => {
+    seed(fakeDb, [
+      ['./jpn.traineddata', new Uint8Array(3_000)],
+      ['./eng.traineddata', new Uint8Array(5_000)],
+      ['unrelated-key', 'keep']
+    ]);
+    assert.equal(await ModelCacheManager.clearAll(), true);
+    const store = fakeDb.databases.get('keyval-store').get('keyval');
+    assert.deepEqual([...store.keys()], ['unrelated-key']);
+    const stats = await ModelCacheManager.getCacheStorageStats();
+    assert.equal(stats.models.ocr.isCached, false);
+    assert.equal(stats.totalBytes, 0);
+  });
+
+  await test('IndexedDB が使えない環境では空の結果と削除失敗を返す', async () => {
+    delete global.indexedDB;
+    const stats = await ModelCacheManager.getCacheStorageStats();
+    assert.equal(stats.models.ocr.isCached, false);
+    assert.equal(await ModelCacheManager.clearAll(), false);
+  });
+
+  if (!process.exitCode) process.stdout.write(`\n${passed} OCR language cache checks passed.\n`);
 })();

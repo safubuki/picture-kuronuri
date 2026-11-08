@@ -10,10 +10,10 @@
     "test:ocr": "node tests/ocr-regression.cjs",
     "test:faces": "node tests/face-avatar-regression.cjs",
     "test:redaction": "node tests/redaction-regression.cjs",
-    "test:llm": "node tests/local-llm-regression.cjs && node tests/model-cache-regression.cjs",
+    "test:cache": "node tests/model-cache-regression.cjs",
     "test:manual": "node tests/manual-stroke-regression.cjs",
     "test:selection": "node tests/selection-shape-regression.cjs",
-    "test": "npm run test:rules && npm run test:ocr && npm run test:faces && npm run test:redaction && npm run test:llm && npm run test:manual && npm run test:selection",
+    "test": "npm run test:rules && npm run test:ocr && npm run test:faces && npm run test:redaction && npm run test:cache && npm run test:manual && npm run test:selection",
     "preview": "vite preview"
   },
   "devDependencies": {
@@ -22,7 +22,6 @@
     "vite-plugin-pwa": "^1.3.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
     "lucide": "^1.45.0",
     "tesseract.js": "^7.0.0"
   }

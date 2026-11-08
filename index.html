@@ -37,13 +37,13 @@
         <button id="btnPwaInstall" class="btn btn-secondary btn-sm" style="display: none;" title="ホーム画面に追加してアプリとして利用">
           📲 アプリ追加
         </button>
-        <!-- AI Feature & Model Settings Button -->
-        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="任意のAI文章清書機能と端末内データの設定">
+        <!-- Settings Button -->
+        <button id="btnOpenStorageModal" class="btn btn-secondary btn-sm" title="AI相談用プロンプトと端末内データの設定">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; opacity: 0.85;">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
           </svg>
-          <span class="btn-text">AI機能設定</span>
+          <span class="btn-text">設定</span>
         </button>
         <div class="sample-menu-wrapper">
           <button id="btnSampleHeader" class="btn btn-secondary btn-sm" title="テスト用サンプル画像を選択" aria-haspopup="true" aria-expanded="false">
@@ -407,9 +407,6 @@
               <button id="btnCopyRedactedText" class="btn btn-secondary btn-block" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.15); color: #93c5fd; font-weight: 600; font-size: 0.82rem; padding: 0.48rem 0.5rem;">
                 📋 伏字テキストをコピー
               </button>
-              <button id="btnAiCleanRedactText" class="btn btn-primary" style="display: none; flex: 1.15; font-size: 0.82rem; padding: 0.48rem 0.5rem; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border: none; font-weight: 600; box-shadow: 0 2px 6px rgba(139, 92, 246, 0.25);" title="文字化けや誤字を文脈から補正し、自然な日本語文章に清書・伏字化します">
-                🤖 AIで文章清書
-              </button>
             </div>
             <details id="detailsRedactedText" open style="font-size: 0.8rem; background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 0.4rem 0.55rem; border: 1px solid rgba(255, 255, 255, 0.06);">
               <summary style="cursor: pointer; color: var(--text-muted); font-weight: 500; user-select: none; margin-bottom: 0.2rem;">
@@ -447,7 +444,6 @@
           <div style="font-size: 0.78rem; color: var(--text-dim); text-align: center;">
             ※ 画面上の黒塗りをタップすると個別に編集・解除できます
           </div>
-          <div id="llmDetectionStatus" role="status" aria-live="polite" style="font-size: 0.78rem; color: var(--text-dim); margin-top: 0.6rem; line-height: 1.5;">AI文脈判定: OFF（ルール判定）</div>
         </div>
 
         <!-- 3. Secondary Toolset: Collapsible Accordions (Quiet by default) -->
@@ -606,8 +602,8 @@
         <div class="panel-card mobile-storage-card">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">AI機能・モデル設定</div>
-              <div style="font-size: 0.72rem; color: var(--text-dim);">任意の文章清書機能・端末内データ管理</div>
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">設定・端末内データ</div>
+              <div style="font-size: 0.72rem; color: var(--text-dim);">AI相談用プロンプト・言語データの管理</div>
             </div>
             <button id="btnOpenStorageModalFromSheet" class="btn btn-secondary btn-sm">
               設定を開く
@@ -668,13 +664,13 @@
       </div>
     </div>
 
-    <!-- AI Model Storage Management Modal -->
+    <!-- Settings & Local Data Modal -->
     <div class="camera-modal" id="modalModelStorage" style="display: none;">
       <div class="camera-modal-backdrop" id="storageBackdrop"></div>
       <div class="camera-modal-content" style="max-width: 520px;">
         <div class="camera-modal-header">
           <div class="camera-modal-title">
-            <span>AI機能・モデル設定</span>
+            <span>設定・端末内データ</span>
           </div>
           <button id="btnCloseStorageModal" class="camera-icon-btn" title="閉じる">
             ✕
@@ -683,7 +679,7 @@
 
         <div style="padding: 1.25rem 1.5rem; overflow-y: auto; max-height: 70vh;">
           <p style="font-size: 0.82rem; color: var(--text-dim); margin-bottom: 1.25rem; line-height: 1.5;">
-            KuroNuri Studio は <strong>100% 端末内（完全ローカル）</strong> で動作します。AIモデルや言語データをブラウザに保存できた場合は、次回も再利用できます。保存できなかった場合や、データを削除した場合は再ダウンロードが必要です。
+            KuroNuri Studio は画像や文字を外部に送信せず、<strong>端末内</strong>で処理します。文字認識用の言語データだけは初回の解析時にダウンロードし、ブラウザに保存できた場合は次回以降も再利用します。
           </p>
 
           <!-- AI Prompt Template Selection -->
@@ -721,45 +717,9 @@
             <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; justify-content: space-between; align-items: center;">
               <div>
                 <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">📝 日本語・英数 OCR 言語データ</div>
-                <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">文字認識用ニューラルLSTM辞書 (約18MB)</div>
+                <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">文字認識用の辞書。初回の解析時に自動で取得します（保存容量 約8MB）</div>
               </div>
-              <span id="statusOcrCache" class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.75rem; padding: 3px 8px; border-radius: 6px;">確認中</span>
-            </div>
-
-            <!-- Opt-in SLM Card -->
-            <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                <div>
-                  <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-                    <span>🤖 AI文脈判定・文章清書 (極小LLM)</span>
-                    <span style="font-size: 0.68rem; background: rgba(245, 158, 11, 0.2); color: #f59e0b; padding: 1px 6px; border-radius: 4px; font-weight: 500;">オプトイン</span>
-                    <span id="statusLlmCache" class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-dim); font-size: 0.7rem; padding: 1px 6px; border-radius: 4px;">未保存</span>
-                  </div>
-                  <div id="llmModelDescription" style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">OCRテキストの清書・伏字化に使用</div>
-                </div>
-                <label style="position: relative; display: inline-block; width: 44px; height: 24px; cursor: pointer;">
-                  <input type="checkbox" id="toggleLlmOptIn" style="opacity: 0; width: 0; height: 0;">
-                  <span id="toggleLlmTrack" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .3s; border-radius: 24px;"></span>
-                  <span id="toggleLlmThumb" style="position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%;"></span>
-                </label>
-              </div>
-
-              <!-- Individual LLM Delete Button (Visible when LLM is cached) -->
-              <div id="llmCachedActions" style="display: none; justify-content: flex-end; margin-top: 6px;">
-                <button id="btnDeleteLlmData" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 2px 8px; color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">
-                  🗑️ 文章AIデータを削除
-                </button>
-              </div>
-
-              <div id="llmProgressContainer" style="display: none; margin-top: 8px;">
-                <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-dim); margin-bottom: 4px;">
-                  <span id="llmProgressStatus">ダウンロード準備中...</span>
-                  <span id="llmProgressPercent">0%</span>
-                </div>
-                <div style="height: 6px; background: #334155; border-radius: 3px; overflow: hidden;">
-                  <div id="llmProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #10b981); transition: width 0.2s;"></div>
-                </div>
-              </div>
+              <span id="statusOcrCache" class="badge" style="flex-shrink: 0; margin-left: 0.75rem; background: rgba(148, 163, 184, 0.15); color: var(--text-dim); border: 1px solid rgba(148, 163, 184, 0.3); font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; white-space: nowrap;">確認中</span>
             </div>
           </div>
 
@@ -780,7 +740,7 @@
               🔄 更新
             </button>
             <button id="btnClearModelCaches" class="btn btn-secondary btn-sm" style="flex: 1; color: #f43f5e; border-color: rgba(244, 63, 94, 0.3);">
-              🗑️ キャッシュ消去
+              🗑️ 言語データを削除
             </button>
           </div>
         </div>

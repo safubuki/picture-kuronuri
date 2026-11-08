@@ -28,10 +28,7 @@ import { autoCorrectCapturedPhoto, type CaptureCorrectionResult } from "./engine
 import { generateRedactedText, buildAiPromptWithRedactedText } from "./utils/redactedTextExport";
 import { registerSW } from "virtual:pwa-register";
 import { ModelCacheManager } from "./engine/modelCache";
-import { isLlmOptInEnabled, setLlmOptInEnabled } from "./engine/aiPreferences";
 import { runOcr } from "./engine/ocr";
-import { LOCAL_LLM_DISPLAY_NAME, LOCAL_LLM_DOWNLOAD_LABEL } from "./engine/localLlmConfig";
-import type { LlmAnalysisSummary } from "./engine/llmRedaction";
 
 // DOM Elements
 const emptyDropZone = document.getElementById("emptyDropZone") as HTMLDivElement;
@@ -177,8 +174,6 @@ const btnNewPhotoHeader = document.getElementById("btnNewPhotoHeader") as HTMLBu
 const btnCopyImage = document.getElementById("btnCopyImage") as HTMLButtonElement;
 const btnDownloadImage = document.getElementById("btnDownloadImage") as HTMLButtonElement;
 const btnCopyRedactedText = document.getElementById("btnCopyRedactedText") as HTMLButtonElement;
-const btnAiCleanRedactText = document.getElementById("btnAiCleanRedactText") as HTMLButtonElement | null;
-const redactedModeBadge = document.getElementById("redactedModeBadge") as HTMLSpanElement | null;
 const txtRedactedPreview = document.getElementById("txtRedactedPreview") as HTMLTextAreaElement;
 const btnCopyPrompt = document.getElementById("btnCopyPrompt") as HTMLButtonElement | null;
 const aiPromptSelect = document.getElementById("aiPromptSelect") as HTMLSelectElement | null;
@@ -203,7 +198,6 @@ const statPerson = document.getElementById("statPerson") as HTMLSpanElement;
 const statCompany = document.getElementById("statCompany") as HTMLSpanElement;
 const statPii = document.getElementById("statPii") as HTMLSpanElement;
 const detectedItemsList = document.getElementById("detectedItemsList") as HTMLDivElement;
-const llmDetectionStatus = document.getElementById("llmDetectionStatus") as HTMLDivElement | null;
 const toast = document.getElementById("toast") as HTMLDivElement;
 const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 
@@ -584,50 +578,14 @@ async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 let currentPreloadedOcr: import("./engine/ocr").OcrResult | undefined;
 let currentPreloadedAvatars: { x: number; y: number; width: number; height: number }[] | undefined;
 let lastOcrResult: import("./engine/ocr").OcrResult | null = null;
-let aiCleanedText: string | null = null;
 let cachedDeskewAngle: number | null = null;
 let analysisRevision = 0;
 let analysisRunning = false;
 let pendingAnalysisReuse: boolean | null = null;
 let guideAfterAnalysis: HTMLImageElement | null = null;
-let lastLlmAnalysis: LlmAnalysisSummary | null = null;
-let llmPreferenceRevision = 0;
-let llmModelPreparing = false;
-
-function updateLlmDetectionStatus(): void {
-  if (!llmDetectionStatus) return;
-  llmDetectionStatus.style.color = "var(--text-dim)";
-  llmDetectionStatus.title = lastLlmAnalysis?.message ?? "";
-  if (!isLlmOptInEnabled()) {
-    llmDetectionStatus.textContent = "AI文脈判定: OFF（ルール判定）";
-  } else if (llmModelPreparing) {
-    llmDetectionStatus.textContent = "AI文脈判定: モデルを準備中";
-  } else if (!appState.getState().sourceImage) {
-    llmDetectionStatus.textContent = "AI文脈判定: 画像の読み込み待ち";
-  } else if (analysisRunning) {
-    llmDetectionStatus.textContent = "AI文脈判定: 解析中";
-  } else if (!lastLlmAnalysis) {
-    llmDetectionStatus.textContent = "AI文脈判定: 未実行";
-  } else {
-    const scope = `${lastLlmAnalysis.analyzedLines}/${lastLlmAnalysis.totalLines}行`;
-    const reused = lastLlmAnalysis.cached ? "・再利用" : "";
-    const partial = lastLlmAnalysis.analyzedLines < lastLlmAnalysis.totalLines ? "・一部のみ" : "";
-    if (lastLlmAnalysis.status === "applied" || lastLlmAnalysis.status === "no_additions") {
-      llmDetectionStatus.textContent = `AI文脈判定: 確認済み・追加 ${lastLlmAnalysis.addedBoxes}件（${scope}${partial}${reused}）`;
-      llmDetectionStatus.style.color = "#34d399";
-    } else if (lastLlmAnalysis.status === "timeout" || lastLlmAnalysis.status === "failed") {
-      llmDetectionStatus.textContent = `AI文脈判定: ${lastLlmAnalysis.status === "timeout" ? "時間超過" : "実行失敗"}（ルール結果を表示）`;
-      llmDetectionStatus.style.color = "#fbbf24";
-    } else {
-      llmDetectionStatus.textContent = "AI文脈判定: 対象なし（ルール結果を表示）";
-    }
-  }
-}
 
 function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void {
   lastOcrResult = null;
-  aiCleanedText = null;
-  lastLlmAnalysis = null;
   cachedDeskewAngle = null;
   currentDetectedDeskewAngle = 0;
   cancelDrawGesture();
@@ -644,102 +602,23 @@ function setSourceImageAndInvalidateAnalysis(img: HTMLImageElement | null): void
   pendingAnalysisReuse = null;
   guideAfterAnalysis = null;
   appState.setSourceImage(img);
-  updateLlmDetectionStatus();
 }
-
-function updateRedactedBadge(mode: "rule" | "ai"): void {
-  if (!redactedModeBadge) return;
-  if (!isLlmOptInEnabled()) {
-    redactedModeBadge.textContent = "外部送信安全";
-    redactedModeBadge.style.background = "rgba(16, 185, 129, 0.15)";
-    redactedModeBadge.style.color = "#34d399";
-    redactedModeBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
-    return;
-  }
-  if (mode === "ai") {
-    redactedModeBadge.textContent = "🤖 AI文脈清書済み";
-    redactedModeBadge.style.background = "linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.25))";
-    redactedModeBadge.style.color = "#c084fc";
-    redactedModeBadge.style.borderColor = "rgba(168, 85, 247, 0.4)";
-  } else {
-    redactedModeBadge.textContent = lastLlmAnalysis?.status === "applied" ? "🤖 AI判定＋ルール伏字" : "⚡ ルール伏字";
-    redactedModeBadge.style.background = "rgba(59, 130, 246, 0.15)";
-    redactedModeBadge.style.color = "#60a5fa";
-    redactedModeBadge.style.borderColor = "rgba(59, 130, 246, 0.3)";
-  }
-}
-
-/**
- * LLMオプトイン設定（ON/OFF）に応じて伏字テキストエリアのボタン・説明文・バッジを動的制御
- */
-function updateRedactedUiByLlmOptIn(): void {
-  const isOptedIn = isLlmOptInEnabled();
-  const redactedDescText = document.getElementById("redactedDescText") as HTMLParagraphElement | null;
-
-  if (isOptedIn) {
-    // LLM有効時：AI清書ボタンを表示し、横並び配置
-    if (btnAiCleanRedactText) {
-      btnAiCleanRedactText.style.display = "inline-flex";
-    }
-    if (btnCopyRedactedText) {
-      btnCopyRedactedText.classList.remove("btn-block");
-      btnCopyRedactedText.style.flex = "1";
-      btnCopyRedactedText.textContent = "📋 テキストをコピー";
-    }
-    if (redactedDescText) {
-      redactedDescText.innerHTML =
-        '個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> 等に伏字化。AIボタンで誤字や文字化けを文脈修復して綺麗に清書できます。';
-    }
-    updateRedactedBadge(aiCleanedText ? "ai" : "rule");
-  } else {
-    // LLM無効時（通常）：AI清書ボタンを非表示にし、コピーボタンを全幅でシンプル表示
-    if (btnAiCleanRedactText) {
-      btnAiCleanRedactText.style.display = "none";
-    }
-    if (btnCopyRedactedText) {
-      btnCopyRedactedText.classList.add("btn-block");
-      btnCopyRedactedText.style.flex = "none";
-      btnCopyRedactedText.textContent = "📋 伏字テキストをコピー";
-    }
-    if (redactedDescText) {
-      redactedDescText.innerHTML =
-        '個人情報を <code style="color: #38bdf8;">[人名]</code> <code style="color: #38bdf8;">[住所]</code> などに置換。画像より高速・安全にAIへ質問できます。';
-    }
-    if (redactedModeBadge) {
-      redactedModeBadge.textContent = "外部送信安全";
-      redactedModeBadge.style.background = "rgba(16, 185, 129, 0.15)";
-      redactedModeBadge.style.color = "#34d399";
-      redactedModeBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
-    }
-  }
-}
-
 
 /**
  * 伏字テキストプレビューの表示更新
- * @param resetAi 手動編集や再解析等でAI清書テキストを破棄してルール伏字に戻す場合は true
  */
-function refreshRedactedTextPreview(resetAi = false): void {
+function refreshRedactedTextPreview(): void {
   const state = appState.getState();
 
-  if (resetAi) {
-    aiCleanedText = null;
-  }
-
   if (!state.sourceImage || !lastOcrResult || lastOcrResult.lines.length === 0) {
-    aiCleanedText = null;
-    updateRedactedBadge("rule");
     if (txtRedactedPreview) {
       txtRedactedPreview.value = state.sourceImage && lastOcrResult
         ? "文字が検出されませんでした。"
         : "黒塗りした部分が、ここに伏字として出ます。";
     }
     if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
-    if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = true;
     return;
   }
-
-  if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = false;
 
   // 行検出だけでは原文を伏字プレビューに出さない。黒塗りが付いてから置換する。
   if (!state.boxes.some((box) => box.enabled)) {
@@ -747,20 +626,9 @@ function refreshRedactedTextPreview(resetAi = false): void {
       txtRedactedPreview.value = "文字行を検出しました。黒塗りした部分が、ここに伏字として出ます。";
     }
     if (btnCopyRedactedText) btnCopyRedactedText.disabled = true;
-    if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = true;
     return;
   }
 
-  // AI清書テキストが既に存在する場合はそれを優先表示
-  if (aiCleanedText) {
-    updateRedactedBadge("ai");
-    if (txtRedactedPreview) txtRedactedPreview.value = aiCleanedText;
-    if (btnCopyRedactedText) btnCopyRedactedText.disabled = false;
-    return;
-  }
-
-  // ルールベース伏字の更新
-  updateRedactedBadge("rule");
   const res = generateRedactedText(lastOcrResult, state.boxes);
   if (txtRedactedPreview) {
     txtRedactedPreview.value = res.redactedText || "(検出された文字はありませんでした)";
@@ -891,7 +759,7 @@ async function detectLinesForManualGuides(sourceImage: HTMLImageElement): Promis
   if (ocrIsUsable(preloaded)) {
     lastOcrResult = preloaded;
     updateCanvasRender();
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
     showToast(`文字行を ${preloaded.lines.length} 本検出しました。黒塗追加でガイドに沿ってなぞれます`, 4000);
     return;
   }
@@ -907,7 +775,7 @@ async function detectLinesForManualGuides(sourceImage: HTMLImageElement): Promis
     if (appState.getState().sourceImage !== sourceImage) return;
     lastOcrResult = ocr;
     updateCanvasRender();
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
     if (revision !== analysisRevision) return;
     if (ocr.lines.length > 0) {
       showToast(`文字行を ${ocr.lines.length} 本検出しました。黒塗追加でガイドに沿ってなぞれます`, 4500);
@@ -953,10 +821,8 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
   analysisRunning = true;
   const sourceImage = state.sourceImage;
   const filterOptions = { ...state.filterOptions, customKeywords: [...state.filterOptions.customKeywords] };
-  const llmEnabledAtStart = isLlmOptInEnabled();
 
   appState.setAnalyzing(true, "解析を準備中...", 0);
-  updateLlmDetectionStatus();
 
   try {
     // 画素を正対化済みなら、箱だけ傾けると位置がずれるので追従しない
@@ -988,9 +854,6 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
       (p) => {
         if (revision === analysisRevision) {
           appState.setAnalyzing(true, p.status, p.progress);
-          if (llmDetectionStatus && isLlmOptInEnabled() && /AI|Qwen3/.test(p.status)) {
-            llmDetectionStatus.textContent = `AI文脈判定: ${p.status}`;
-          }
         }
       },
       reusableOcr,
@@ -1000,12 +863,11 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
     if (sourceImage !== appState.getState().sourceImage) return;
     // 同じ画像で後続リクエストが待機している場合も、OCRは次の解析に再利用する。
     lastOcrResult = result.ocrResult;
-    if (revision !== analysisRevision || llmEnabledAtStart !== isLlmOptInEnabled()) return;
-    lastLlmAnalysis = result.llmAnalysis;
-    // AIのON/OFF再解析で、ユーザーが追加した手動枠を失わない。
+    if (revision !== analysisRevision) return;
+    // 再解析でも、ユーザーが追加した手動枠を失わない。
     const manualBoxes = appState.getState().boxes.filter((box) => box.isManual || box.type === "manual");
     appState.setBoxes([...result.boxes, ...manualBoxes]);
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
 
     const slopeNotice = currentDetectedDeskewAngle !== 0 ? ` (傾き ${currentDetectedDeskewAngle > 0 ? "+" : ""}${currentDetectedDeskewAngle.toFixed(1)}° 追従)` : "";
     const corrNotice = lastCorrection && !lastCorrection.skipped ? " / 正対化済み" : "";
@@ -1014,8 +876,7 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
     if (ocrWarning) {
       showToast(`⚠️ ${ocrWarning}`, 6000);
     } else {
-      const aiNotice = result.llmAnalysis.status === "applied" ? ` / AIで${result.llmAnalysis.addedBoxes}箇所追加` : "";
-      showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${aiNotice}${slopeNotice}${corrNotice}${photoNotice}`);
+      showToast(`解析完了: ${result.boxes.length}箇所のプライバシー情報を保護しました${slopeNotice}${corrNotice}${photoNotice}`);
     }
   } catch (err) {
     console.error("Analysis failed:", err);
@@ -1023,7 +884,6 @@ async function startAnalysis(reuseOcr: boolean = false): Promise<void> {
   } finally {
     analysisRunning = false;
     appState.setAnalyzing(false);
-    updateLlmDetectionStatus();
     if (pendingAnalysisReuse !== null) {
       const reuse = pendingAnalysisReuse;
       pendingAnalysisReuse = null;
@@ -1712,7 +1572,7 @@ function updateSelectedBoxVertical(next: (rect: RedactBox["rect"]) => { y: numbe
     return { rect: { ...box.rect, y: nextY, height: nextHeight } };
   });
   updateCanvasRender();
-  refreshRedactedTextPreview(true);
+  refreshRedactedTextPreview();
   // 編集パネルは基本動かさない。連打中にボタンの位置がずれて押せなくなるのを防ぐ。
   // ただし黒塗りがパネルの下に隠れるときだけ、見える位置へ置き直す。
   if (selectedBoxes().some(isBoxHiddenByPopover)) showBoxEditorPopover({ preserveFields: true });
@@ -1953,7 +1813,7 @@ function finishManualStroke(): void {
   currentSnapResult = null;
   activeSnappedLine = null;
   updateCanvasRender();
-  refreshRedactedTextPreview(true);
+  refreshRedactedTextPreview();
   syncDrawCursor();
 }
 
@@ -2033,7 +1893,6 @@ function syncUiWithState(state: AppState): void {
   if (btnMobileCopy) btnMobileCopy.disabled = !hasImage;
   if (btnMobileDownload) btnMobileDownload.disabled = !hasImage;
   btnCopyRedactedText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
-  if (btnAiCleanRedactText) btnAiCleanRedactText.disabled = !hasImage || !lastOcrResult || lastOcrResult.lines.length === 0;
   btnCompare.disabled = !hasImage;
   if (btnClearAllBoxes) btnClearAllBoxes.disabled = !hasImage || state.boxes.length === 0;
   if (btnSideClearAll) btnSideClearAll.disabled = !hasImage || state.boxes.length === 0;
@@ -2141,7 +2000,7 @@ function syncUiWithState(state: AppState): void {
   });
 
   // 伏字テキストプレビューの同期
-  refreshRedactedTextPreview(true);
+  refreshRedactedTextPreview();
 
   // Canvas再描画
   updateCanvasRender();
@@ -2501,7 +2360,7 @@ function initEvents(): void {
           popoverToggleText.textContent = enabled ? "保護を一時解除" : "保護を再適用";
         }
         updateCanvasRender();
-        refreshRedactedTextPreview(true);
+        refreshRedactedTextPreview();
       });
     }
 
@@ -2529,7 +2388,7 @@ function initEvents(): void {
         const ids = [...appState.getState().selectedBoxIds];
         if (ids.length === 0) return;
         appState.removeBoxes(ids);
-        refreshRedactedTextPreview(true);
+        refreshRedactedTextPreview();
         showToast(ids.length > 1 ? `🗑️ ${ids.length}件の黒塗りを削除しました` : "🗑️ 黒塗りを削除しました");
         closeBoxEditor();
       });
@@ -2574,7 +2433,7 @@ function initEvents(): void {
     const state = appState.getState();
     if (!state.sourceImage || state.boxes.length === 0) return;
     appState.clearAllBoxes();
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
     showToast("🗑️ すべての黒塗りを解除しました（「✨ 自動検出」で再検出できます）");
   };
   if (btnClearAllBoxes) btnClearAllBoxes.addEventListener("click", clearAllAction);
@@ -2593,11 +2452,11 @@ function initEvents(): void {
 
   btnUndo.addEventListener("click", () => {
     appState.undo();
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
   });
   btnRedo.addEventListener("click", () => {
     appState.redo();
-    refreshRedactedTextPreview(true);
+    refreshRedactedTextPreview();
   });
   btnReset.addEventListener("click", () => {
     if (confirm("現在の画像を閉じて新しく始めますか？")) {
@@ -2917,12 +2776,7 @@ function initEvents(): void {
       return;
     }
 
-    // AI清書テキストがあればそれを優先、なければルールベース生成
-    let targetText = aiCleanedText;
-    if (!targetText) {
-      const res = generateRedactedText(lastOcrResult, state.boxes);
-      targetText = res.redactedText;
-    }
+    const targetText = generateRedactedText(lastOcrResult, state.boxes).redactedText;
 
     if (!targetText || targetText.trim().length === 0) {
       showToast("コピー可能なテキストが見つかりませんでした");
@@ -2935,8 +2789,6 @@ function initEvents(): void {
       fullText = buildAiPromptWithRedactedText(targetText, promptType);
     }
 
-    const isAiMode = !!aiCleanedText;
-
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(fullText);
@@ -2944,9 +2796,9 @@ function initEvents(): void {
         throw new Error("clipboard API unsupported");
       }
       if (promptType !== "none") {
-        showToast(isAiMode ? "🤖 AI清書伏字テキスト＋AI指示文をコピーしました" : "伏字テキスト＋AI指示文をコピーしました", 3500);
+        showToast("伏字テキスト＋AI指示文をコピーしました", 3500);
       } else {
-        showToast(isAiMode ? "🤖 AI清書伏字テキストをコピーしました" : "伏字テキストをコピーしました", 3500);
+        showToast("伏字テキストをコピーしました", 3500);
       }
     } catch {
       // フォールバック
@@ -2955,85 +2807,12 @@ function initEvents(): void {
         txtRedactedPreview.focus();
         txtRedactedPreview.select();
         document.execCommand("copy");
-        showToast(isAiMode ? "🤖 AI清書伏字テキストをコピーしました" : "伏字テキストをコピーしました", 3500);
+        showToast("伏字テキストをコピーしました", 3500);
       } else {
         showToast("クリップボードへのコピーに失敗しました");
       }
     }
   });
-
-  // 🤖 AIで文章清書・高精度伏字化ボタン
-  if (btnAiCleanRedactText) {
-    btnAiCleanRedactText.addEventListener("click", async () => {
-      const state = appState.getState();
-      if (!state.sourceImage || !lastOcrResult || lastOcrResult.lines.length === 0) {
-        showToast("清書対象のテキストデータがありません");
-        return;
-      }
-
-      // 現在のルールベース伏字テキスト、またはOCR生テキストを取得
-      const res = generateRedactedText(lastOcrResult, state.boxes);
-      const textToClean = res.redactedText || lastOcrResult.lines.map((l) => l.text).join("\n");
-      if (!textToClean || textToClean.trim().length === 0) {
-        showToast("清書対象のテキストが空です");
-        return;
-      }
-
-      // LLMオプトイン確認
-      if (!isLlmOptInEnabled()) {
-        const agreed = confirm(
-          "【🤖 AI文章清書機能】\n\n" +
-          "文字化けや誤字を文脈から補正し、自然で綺麗な日本語で個人情報を伏字化します。\n\n" +
-          `※ ブラウザ内の極小AIモデル（${LOCAL_LLM_DISPLAY_NAME}）を端末で実行します。初回ダウンロードは${LOCAL_LLM_DOWNLOAD_LABEL}です（実行環境により異なります）。\n` +
-          "※ 画像やテキストが外部サーバーへ送信されることは一切ありません（完全ローカル実行）。\n\n" +
-          "ダウンロードして実行しますか？"
-        );
-        if (!agreed) return;
-        setLlmOptInEnabled(true);
-        const toggleLlmOptInEl = document.getElementById("toggleLlmOptIn") as HTMLInputElement | null;
-        if (toggleLlmOptInEl) {
-          toggleLlmOptInEl.checked = true;
-        }
-      }
-
-
-
-      const originalBtnText = btnAiCleanRedactText.innerHTML;
-      btnAiCleanRedactText.disabled = true;
-      btnAiCleanRedactText.innerHTML = `清書中...`;
-
-      showToast("🤖 文脈AIが文章を清書・高精度伏字化しています...", 5000);
-
-      try {
-        const { cleanAndRedactTextWithLlm } = await import("./engine/localLlm");
-        const cleaned = await cleanAndRedactTextWithLlm(textToClean, (status) => {
-          showToast(`🤖 ${status}`, 3000);
-        });
-
-        if (cleaned && cleaned.trim().length > 0) {
-          aiCleanedText = cleaned;
-          if (txtRedactedPreview) {
-            txtRedactedPreview.value = cleaned;
-          }
-          updateRedactedBadge("ai");
-          if (btnCopyRedactedText) btnCopyRedactedText.disabled = false;
-          // プレビューを開いて見せる
-          const details = document.getElementById("detailsRedactedText") as HTMLDetailsElement | null;
-          if (details) details.open = true;
-          showToast("✨ AIによる文章清書・高精度伏字化が完了しました！", 4000);
-        } else {
-          showToast("AI清書結果が空でした。通常の伏字テキストを表示します");
-        }
-      } catch (err) {
-        console.error("[AiClean] Error during cleanAndRedactTextWithLlm:", err);
-        showToast("⚠️ AI文章清書中にエラーが発生しました。通常伏字テキストをご利用ください", 4000);
-      } finally {
-        btnAiCleanRedactText.disabled = false;
-        btnAiCleanRedactText.innerHTML = originalBtnText;
-      }
-    });
-  }
-
 
   if (aiPromptSelect) {
     const savedPrompt = localStorage.getItem("kuronuri_prompt_template");
@@ -3693,169 +3472,36 @@ function initPwaAndStorageManager(): void {
   const backdrop = document.getElementById("storageBackdrop") as HTMLDivElement | null;
   const btnRefresh = document.getElementById("btnRefreshStorageStats") as HTMLButtonElement | null;
   const btnClear = document.getElementById("btnClearModelCaches") as HTMLButtonElement | null;
-  const toggleLlm = document.getElementById("toggleLlmOptIn") as HTMLInputElement | null;
-  const toggleLlmTrack = document.getElementById("toggleLlmTrack") as HTMLSpanElement | null;
-  const toggleLlmThumb = document.getElementById("toggleLlmThumb") as HTMLSpanElement | null;
-  const llmProgressContainer = document.getElementById("llmProgressContainer") as HTMLDivElement | null;
-  const llmProgressBar = document.getElementById("llmProgressBar") as HTMLDivElement | null;
-  const llmProgressStatus = document.getElementById("llmProgressStatus") as HTMLSpanElement | null;
-  const llmProgressPercent = document.getElementById("llmProgressPercent") as HTMLSpanElement | null;
-  const llmModelDescription = document.getElementById("llmModelDescription") as HTMLDivElement | null;
-
-  if (llmModelDescription) {
-    llmModelDescription.textContent = `${LOCAL_LLM_DISPLAY_NAME} / 黒塗りの文脈補完・文章清書（初回 ${LOCAL_LLM_DOWNLOAD_LABEL}）`;
-    llmModelDescription.title = "通常時のダウンロード容量の目安です。GPU初期化に失敗してCPUへ切り替わる場合は、CPU用のモデルを追加取得します。";
-  }
-
   const storageTotalBytes = document.getElementById("storageTotalBytes") as HTMLSpanElement | null;
   const statusOcrCache = document.getElementById("statusOcrCache") as HTMLSpanElement | null;
-  const statusLlmCache = document.getElementById("statusLlmCache") as HTMLSpanElement | null;
-  const llmCachedActions = document.getElementById("llmCachedActions") as HTMLDivElement | null;
-  const btnDeleteLlmData = document.getElementById("btnDeleteLlmData") as HTMLButtonElement | null;
 
-  const updateToggleUi = (checked: boolean) => {
-    if (!toggleLlmTrack || !toggleLlmThumb) return;
-    if (checked) {
-      toggleLlmTrack.style.backgroundColor = "#0284c7";
-      toggleLlmThumb.style.transform = "translateX(20px)";
-    } else {
-      toggleLlmTrack.style.backgroundColor = "#334155";
-      toggleLlmThumb.style.transform = "translateX(0px)";
-    }
+  const setOcrBadge = (text: string, tone: "ok" | "muted", title: string) => {
+    if (!statusOcrCache) return;
+    const rgb = tone === "ok" ? "16, 185, 129" : "148, 163, 184";
+    statusOcrCache.textContent = text;
+    statusOcrCache.title = title;
+    statusOcrCache.style.color = tone === "ok" ? "#10b981" : "var(--text-dim)";
+    statusOcrCache.style.background = `rgba(${rgb}, 0.15)`;
+    statusOcrCache.style.borderColor = `rgba(${rgb}, 0.3)`;
   };
 
   const updateStorageStats = async () => {
     if (!storageTotalBytes) return;
-    try {
-      storageTotalBytes.textContent = "計算中...";
-      const stats = await ModelCacheManager.getCacheStorageStats();
-      const mb = (stats.totalBytes / (1024 * 1024)).toFixed(1);
-      storageTotalBytes.textContent = `${mb} MB (計 ${stats.itemsCount} ファイル)`;
+    storageTotalBytes.textContent = "計算中...";
+    const stats = await ModelCacheManager.getCacheStorageStats();
+    const mb = (stats.totalBytes / (1024 * 1024)).toFixed(1);
+    storageTotalBytes.textContent = `${mb} MB`;
 
-      if (statusOcrCache) {
-        statusOcrCache.textContent = stats.models.ocr.isCached ? "保存済み" : "自動取得";
-        statusOcrCache.style.color = stats.models.ocr.isCached ? "#10b981" : "var(--text-dim)";
-      }
-      if (statusLlmCache) {
-        if (stats.models.llm.isCached) {
-          const llmMb = (stats.models.llm.sizeBytes / (1024 * 1024)).toFixed(0);
-          statusLlmCache.textContent = `保存済み (合計 ${llmMb} MB)`;
-          statusLlmCache.title = "Qwen3の保存を確認済みです。容量には旧モデルや他の量子化形式も含みます。";
-          statusLlmCache.style.color = "#10b981";
-          if (llmCachedActions) llmCachedActions.style.display = "flex";
-        } else {
-          statusLlmCache.textContent = "未保存";
-          statusLlmCache.title = "現在のQwen3モデルが揃っていません。残っている旧モデルや取得途中のデータは削除できます。";
-          statusLlmCache.style.color = "var(--text-dim)";
-          if (llmCachedActions) llmCachedActions.style.display = stats.models.llm.sizeBytes > 0 ? "flex" : "none";
-        }
-      }
-      return stats;
-    } catch {
-      storageTotalBytes.textContent = "取得エラー";
-      return null;
+    const ocr = stats.models.ocr;
+    if (ocr.isCached) {
+      setOcrBadge(`保存済み (${(ocr.sizeBytes / (1024 * 1024)).toFixed(1)} MB)`, "ok",
+        `保存済みの言語: ${ocr.languages.join(", ")}。次回以降はダウンロードせずに使います。`);
+    } else if (ocr.languages.length > 0) {
+      setOcrBadge("一部のみ保存", "muted", `保存済みの言語: ${ocr.languages.join(", ")}。不足分は次回の解析時に取得します。`);
+    } else {
+      setOcrBadge("未取得", "muted", "画像を解析すると自動で取得し、ブラウザに保存します。");
     }
   };
-
-  const prepareLlmAndAnalyze = async (requestRevision: number) => {
-    llmModelPreparing = true;
-    updateLlmDetectionStatus();
-    if (llmProgressContainer) llmProgressContainer.style.display = "block";
-    showToast(`🤖 ${LOCAL_LLM_DISPLAY_NAME} の初期化を開始します`);
-    try {
-      const { getLocalLlmPipeline } = await import("./engine/localLlm");
-      const pipe = await getLocalLlmPipeline((status, progress) => {
-        if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
-        if (llmProgressStatus) llmProgressStatus.textContent = status;
-        if (llmProgressPercent) llmProgressPercent.textContent = `${Math.round(progress * 100)}%`;
-        if (llmProgressBar) llmProgressBar.style.width = `${Math.round(progress * 100)}%`;
-      });
-      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
-      if (!pipe) throw new Error("Pipeline returned null");
-      llmModelPreparing = false;
-      const stats = await updateStorageStats();
-      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
-      showToast(stats?.models.llm.isCached
-        ? "✨ AI文脈判定の準備が完了しました！"
-        : "文脈AIは利用できますが、モデルを保存できませんでした。次回起動時に再取得が必要です");
-      // 初回取得が解析の時間上限を超えても、準備完了後に現在画像を判定し直す。
-      if (appState.getState().sourceImage) await startAnalysis(true);
-    } catch (err) {
-      if (requestRevision !== llmPreferenceRevision || !isLlmOptInEnabled()) return;
-      console.warn("[StorageModal] LLM activation failed:", err);
-      llmModelPreparing = false;
-      setLlmOptInEnabled(false);
-      if (toggleLlm) toggleLlm.checked = false;
-      updateToggleUi(false);
-      updateRedactedUiByLlmOptIn();
-      showToast("⚠️ 文脈AIを利用できませんでした。通常のOCR＋ルール検出は引き続き利用できます");
-      await updateStorageStats();
-      if (appState.getState().sourceImage) await startAnalysis(true);
-    } finally {
-      if (requestRevision === llmPreferenceRevision) {
-        llmModelPreparing = false;
-        if (llmProgressContainer) llmProgressContainer.style.display = "none";
-        updateLlmDetectionStatus();
-      }
-    }
-  };
-
-  btnDeleteLlmData?.addEventListener("click", async () => {
-    if (confirm("端末に保存されている文章AI（極小LLM）のモデルデータを削除しますか？\n（いつでも再ダウンロード・再有効化できます）")) {
-      await ModelCacheManager.clearCategory("llm");
-      llmPreferenceRevision++;
-      setLlmOptInEnabled(false);
-      llmModelPreparing = false;
-      lastLlmAnalysis = null;
-      if (llmProgressContainer) llmProgressContainer.style.display = "none";
-      if (toggleLlm) toggleLlm.checked = false;
-      updateToggleUi(false);
-      updateRedactedUiByLlmOptIn();
-      showToast("🗑️ 文章AIデータを削除し、端末容量を解放しました");
-      await updateStorageStats();
-      if (appState.getState().sourceImage) await startAnalysis(true);
-      updateLlmDetectionStatus();
-    }
-  });
-
-  if (toggleLlm) {
-    toggleLlm.checked = isLlmOptInEnabled();
-    updateToggleUi(toggleLlm.checked);
-
-    toggleLlm.addEventListener("change", async () => {
-      const enabled = toggleLlm.checked;
-      const requestRevision = ++llmPreferenceRevision;
-      setLlmOptInEnabled(enabled);
-      lastLlmAnalysis = null;
-      updateToggleUi(enabled);
-      updateRedactedUiByLlmOptIn();
-      updateLlmDetectionStatus();
-
-      if (enabled) {
-        await prepareLlmAndAnalyze(requestRevision);
-      } else {
-        llmModelPreparing = false;
-        if (llmProgressContainer) llmProgressContainer.style.display = "none";
-        // OFFにした画像からAIで追加した枠を除き、手動枠を保持する。
-        if (appState.getState().sourceImage) await startAnalysis(true);
-        const stats = await ModelCacheManager.getCacheStorageStats();
-        if (requestRevision !== llmPreferenceRevision || isLlmOptInEnabled()) return;
-        if (stats.models.llm.sizeBytes > 0) {
-          if (confirm("AI文脈判定をOFFにしました。\n端末に保存されているモデルデータも削除して空き容量を増やしますか？")) {
-            await ModelCacheManager.clearCategory("llm");
-            showToast("🗑️ モデルデータを削除し、空き容量を解放しました");
-          } else {
-            showToast("AI文脈判定を無効化しました（モデルは保持されます）");
-          }
-        } else {
-          showToast("AI文脈判定を無効化しました");
-        }
-        await updateStorageStats();
-      }
-    });
-    if (toggleLlm.checked) void prepareLlmAndAnalyze(llmPreferenceRevision);
-  }
-
 
   const openModal = () => {
     if (modal) modal.style.display = "flex";
@@ -3872,9 +3518,9 @@ function initPwaAndStorageManager(): void {
   btnRefresh?.addEventListener("click", updateStorageStats);
 
   btnClear?.addEventListener("click", async () => {
-    if (confirm("端末に保存されているAIモデルキャッシュをすべて削除しますか？\n（次回の自動検出時に必要に応じて再ダウンロードされます）")) {
-      await ModelCacheManager.clearAll();
-      showToast("🗑️ キャッシュを消去しました");
+    if (confirm("端末に保存されているOCR言語データを削除しますか？\n（次にアプリを開いて解析するとき、自動で再ダウンロードされます）")) {
+      const cleared = await ModelCacheManager.clearAll();
+      showToast(cleared ? "🗑️ OCR言語データを削除しました" : "OCR言語データを削除できませんでした");
       await updateStorageStats();
     }
   });
@@ -3883,6 +3529,4 @@ function initPwaAndStorageManager(): void {
 // 初期化実行
 initEvents();
 initPwaAndStorageManager();
-updateRedactedUiByLlmOptIn();
-updateLlmDetectionStatus();
 

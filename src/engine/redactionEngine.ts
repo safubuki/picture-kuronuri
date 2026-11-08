@@ -7,7 +7,6 @@ import { detectLayoutPii } from "./rules/layoutRules";
 import { mapNormRangeToOriginal, normalizeOcrText } from "./ocrNormalize";
 import { snapBoxesToInk } from "./inkSnap";
 import { findExactEntityRanges, prepareSearchText } from "./textMatching";
-import { analyzeOcrWithLlm, type LlmAnalysisSummary } from "./llmRedaction";
 
 export type RedactType =
   | "face"
@@ -98,7 +97,7 @@ export async function analyzeImageForRedaction(
   preloadedOcr?: OcrResult,
   preloadedAvatars?: { x: number; y: number; width: number; height: number }[],
   rotationAngle: number = 0
-): Promise<{ boxes: RedactBox[]; ocrResult: OcrResult; llmAnalysis: LlmAnalysisSummary }> {
+): Promise<{ boxes: RedactBox[]; ocrResult: OcrResult }> {
   const boxes: RedactBox[] = [];
 
   // OCRの本文座標を先に確定し、文字を写真と誤検出する経路を除外する。
@@ -379,49 +378,6 @@ export async function analyzeImageForRedaction(
     }
   }
 
-  // AIの名称は文書全体へ伝播させず、指定されたOCR行の原文一致位置だけに追加する。
-  const llmResult = await analyzeOcrWithLlm(ocrResult,
-    options.detectPersons || options.detectCompanies || options.detectPii,
-    (status) => onProgress?.({ status, progress: 0.92 }));
-  const llmAnalysis = llmResult.analysis;
-  for (const entity of llmResult.entities) {
-    if (entity.type === "person" && !options.detectPersons) continue;
-    if (entity.type === "company" && !options.detectCompanies) continue;
-    if ((entity.type === "pii" || entity.type === "confidential") && !options.detectPii) continue;
-    const line = ocrResult.lines[entity.lineIndex];
-    if (!line) continue;
-    let start = line.text.indexOf(entity.text);
-    while (start !== -1) {
-      const end = start + entity.text.length;
-      const rect = calculateBBoxForRange(line, start, end);
-      if (rect) {
-        const padded = applyPadding(rect, options.padding, imageElement.width, imageElement.height, isScreenPhoto || smallText);
-        const alreadyCovered = boxes.some((box) => {
-          if (box.type === "face" || box.type === "avatar" || !box.enabled) return false;
-          const overlapWidth = Math.min(box.rect.x + box.rect.width, padded.x + padded.width) - Math.max(box.rect.x, padded.x);
-          const overlapHeight = Math.min(box.rect.y + box.rect.height, padded.y + padded.height) - Math.max(box.rect.y, padded.y);
-          return overlapWidth > 0 && overlapHeight > 0 && overlapWidth * overlapHeight / Math.max(1, padded.width * padded.height) >= 0.85;
-        });
-        if (!alreadyCovered) {
-          const label = entity.type === "person" ? "人名 (AI)" : entity.type === "company" ? "会社名 (AI)" : entity.type === "confidential" ? "機密情報 (AI)" : "個人情報 (AI)";
-          boxes.push({
-            id: `llm-${entity.type}-${entity.lineIndex}-${start}`,
-            type: entity.type === "confidential" ? "pii" : entity.type,
-            label,
-            text: entity.text,
-            reason: `文脈AIの追加判定 (${label})`,
-            rect: padded,
-            enabled: true,
-            confidence: Math.max(0, Math.min(0.9, line.confidence / 100))
-          });
-          llmAnalysis.addedBoxes++;
-        }
-      }
-      start = line.text.indexOf(entity.text, end);
-    }
-  }
-  if (llmAnalysis.status === "no_additions" && llmAnalysis.addedBoxes > 0) llmAnalysis.status = "applied";
-
   // 傾き角度の反映（斜め文字行の追従マスキング用）
   // すでに画素側で正対化している場合は回転を掛けない（箱が文字からズレる）
   if (rotationAngle !== 0 && Math.abs(rotationAngle) >= 0.8) {
@@ -453,8 +409,7 @@ export async function analyzeImageForRedaction(
 
   return {
     boxes: finalBoxes,
-    ocrResult,
-    llmAnalysis
+    ocrResult
   };
 }
 
