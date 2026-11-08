@@ -1,12 +1,22 @@
 import { type RedactBox, type RedactionFilterOptions, DEFAULT_FILTER_OPTIONS } from "../engine/redactionEngine";
 import { type CanvasRendererOptions, DEFAULT_RENDERER_OPTIONS } from "../engine/canvasRenderer";
+import type { Annotation } from "../engine/annotations";
 
-export type InteractionMode = "select" | "draw" | "compare";
+export type InteractionMode = "select" | "draw" | "shape" | "compare";
+
+/** 戻す/やり直しの1段。黒塗りと図形をいっしょに記録する。 */
+export interface HistorySnapshot {
+  boxes: RedactBox[];
+  annotations: Annotation[];
+}
 
 export interface AppState {
   sourceImage: HTMLImageElement | null;
   boxes: RedactBox[];
-  history: RedactBox[][];
+  /** 矢印・丸・四角などの注釈図形。黒塗りの上に描く。 */
+  annotations: Annotation[];
+  selectedAnnotationId: string | null;
+  history: HistorySnapshot[];
   historyIndex: number;
   filterOptions: RedactionFilterOptions;
   rendererOptions: CanvasRendererOptions;
@@ -19,12 +29,17 @@ export interface AppState {
   panX: number;
   panY: number;
   lineSnapEnabled: boolean;
+  /** 編集パネルの基準になる黒塗り。複数選択中も、そのうちの一つを指す。 */
   selectedBoxId: string | null;
+  /** 選択中の黒塗りすべて（selectedBoxId を含む）。2件以上なら一括設定。 */
+  selectedBoxIds: string[];
 }
 
 export const initialState: AppState = {
   sourceImage: null,
   boxes: [],
+  annotations: [],
+  selectedAnnotationId: null,
   history: [],
   historyIndex: -1,
   filterOptions: { ...DEFAULT_FILTER_OPTIONS },
@@ -38,7 +53,8 @@ export const initialState: AppState = {
   panX: 0,
   panY: 0,
   lineSnapEnabled: true,
-  selectedBoxId: null
+  selectedBoxId: null,
+  selectedBoxIds: []
 };
 
 export class StateManager {
@@ -70,19 +86,50 @@ export class StateManager {
   public setSourceImage(img: HTMLImageElement | null): void {
     this.state.sourceImage = img;
     this.state.boxes = [];
-    this.state.history = [];
-    this.state.historyIndex = -1;
+    this.state.annotations = [];
+    this.state.selectedAnnotationId = null;
+    // 何もない状態を最初の1段にしておき、最初に描いた線や図形も「戻す」で消せるようにする
+    this.state.history = img ? [{ boxes: [], annotations: [] }] : [];
+    this.state.historyIndex = img ? 0 : -1;
     this.state.zoom = 1.0;
     this.state.panX = 0;
     this.state.panY = 0;
     this.state.selectedBoxId = null;
+    this.state.selectedBoxIds = [];
     this.notify();
   }
 
   public setSelectedBoxId(boxId: string | null): void {
-    if (this.state.selectedBoxId === boxId) return;
+    const ids = boxId ? [boxId] : [];
+    if (this.state.selectedBoxId === boxId && this.state.selectedBoxIds.length === ids.length) return;
     this.state.selectedBoxId = boxId;
+    this.state.selectedBoxIds = ids;
     this.notify();
+  }
+
+  /** 複数の黒塗りを選ぶ。anchorId は編集パネルの基準（省略時は最後の1件）。 */
+  public setSelection(ids: string[], anchorId?: string | null): void {
+    const existing = new Set(this.state.boxes.map((b) => b.id));
+    const unique = [...new Set(ids)].filter((id) => existing.has(id));
+    const anchor = anchorId && unique.includes(anchorId) ? anchorId : (unique[unique.length - 1] ?? null);
+    const same =
+      anchor === this.state.selectedBoxId &&
+      unique.length === this.state.selectedBoxIds.length &&
+      unique.every((id, i) => id === this.state.selectedBoxIds[i]);
+    if (same) return;
+    this.state.selectedBoxId = anchor;
+    this.state.selectedBoxIds = unique;
+    this.notify();
+  }
+
+  /** 消えた黒塗りを選択から外す。 */
+  private pruneSelection(): void {
+    const existing = new Set(this.state.boxes.map((b) => b.id));
+    const ids = this.state.selectedBoxIds.filter((id) => existing.has(id));
+    this.state.selectedBoxIds = ids;
+    if (!this.state.selectedBoxId || !existing.has(this.state.selectedBoxId)) {
+      this.state.selectedBoxId = ids[ids.length - 1] ?? null;
+    }
   }
 
   public updateBox(boxId: string, updates: Partial<RedactBox>, recordHistory = true): void {
@@ -93,7 +140,28 @@ export class StateManager {
       return b;
     });
     this.state.boxes = nextBoxes;
-    if (recordHistory) this.pushHistory(nextBoxes);
+    if (recordHistory) this.pushHistory();
+    this.notify();
+  }
+
+  /** 複数の黒塗りをまとめて変更する。戻すは1回で全部元に戻る。 */
+  public updateBoxes(
+    boxIds: string[],
+    updates: Partial<RedactBox> | ((box: RedactBox) => Partial<RedactBox> | null),
+    recordHistory = true
+  ): void {
+    const ids = new Set(boxIds);
+    let changed = false;
+    const nextBoxes = this.state.boxes.map((b) => {
+      if (!ids.has(b.id)) return b;
+      const patch = typeof updates === "function" ? updates(b) : updates;
+      if (!patch) return b;
+      changed = true;
+      return { ...b, ...patch };
+    });
+    if (!changed) return;
+    this.state.boxes = nextBoxes;
+    if (recordHistory) this.pushHistory();
     this.notify();
   }
 
@@ -107,7 +175,8 @@ export class StateManager {
   public setBoxes(boxes: RedactBox[]): void {
     this.state.boxes = boxes;
     this.state.selectedBoxId = null;
-    this.pushHistory(boxes);
+    this.state.selectedBoxIds = [];
+    this.pushHistory();
     this.notify();
   }
 
@@ -119,7 +188,7 @@ export class StateManager {
       return b;
     });
     this.state.boxes = nextBoxes;
-    this.pushHistory(nextBoxes);
+    this.pushHistory();
     this.notify();
   }
 
@@ -146,8 +215,11 @@ export class StateManager {
 
     const nextBoxes = [...this.state.boxes, newBox];
     this.state.boxes = nextBoxes;
-    if (select) this.state.selectedBoxId = newBox.id;
-    this.pushHistory(nextBoxes);
+    if (select) {
+      this.state.selectedBoxId = newBox.id;
+      this.state.selectedBoxIds = [newBox.id];
+    }
+    this.pushHistory();
     this.notify();
     return newBox;
   }
@@ -162,21 +234,23 @@ export class StateManager {
     const nextBoxes = this.state.boxes
       .filter(b => !remove.has(b.id))
       .map(b => (b.id === keepId ? { ...b, rect } : b));
-    if (this.state.selectedBoxId && remove.has(this.state.selectedBoxId)) {
-      this.state.selectedBoxId = null;
-    }
     this.state.boxes = nextBoxes;
-    this.pushHistory(nextBoxes);
+    this.pruneSelection();
+    this.pushHistory();
     this.notify();
   }
 
   public removeBox(boxId: string): void {
-    if (this.state.selectedBoxId === boxId) {
-      this.state.selectedBoxId = null;
-    }
-    const nextBoxes = this.state.boxes.filter(b => b.id !== boxId);
+    this.removeBoxes([boxId]);
+  }
+
+  public removeBoxes(boxIds: string[]): void {
+    const remove = new Set(boxIds);
+    const nextBoxes = this.state.boxes.filter(b => !remove.has(b.id));
+    if (nextBoxes.length === this.state.boxes.length) return;
     this.state.boxes = nextBoxes;
-    this.pushHistory(nextBoxes);
+    this.pruneSelection();
+    this.pushHistory();
     this.notify();
   }
 
@@ -184,7 +258,8 @@ export class StateManager {
     if (this.state.boxes.length === 0) return;
     this.state.boxes = [];
     this.state.selectedBoxId = null;
-    this.pushHistory([]);
+    this.state.selectedBoxIds = [];
+    this.pushHistory();
     this.notify();
   }
 
@@ -246,7 +321,7 @@ export class StateManager {
   public undo(): void {
     if (this.state.historyIndex > 0) {
       this.state.historyIndex--;
-      this.state.boxes = JSON.parse(JSON.stringify(this.state.history[this.state.historyIndex]));
+      this.restoreSnapshot(this.state.history[this.state.historyIndex]);
       this.notify();
     }
   }
@@ -254,15 +329,68 @@ export class StateManager {
   public redo(): void {
     if (this.state.historyIndex < this.state.history.length - 1) {
       this.state.historyIndex++;
-      this.state.boxes = JSON.parse(JSON.stringify(this.state.history[this.state.historyIndex]));
+      this.restoreSnapshot(this.state.history[this.state.historyIndex]);
       this.notify();
     }
   }
 
-  private pushHistory(boxes: RedactBox[]): void {
+  private restoreSnapshot(snapshot: HistorySnapshot): void {
+    const copy: HistorySnapshot = JSON.parse(JSON.stringify(snapshot));
+    this.state.boxes = copy.boxes;
+    this.state.annotations = copy.annotations;
+    this.pruneSelection();
+    if (this.state.selectedAnnotationId && !copy.annotations.some((a) => a.id === this.state.selectedAnnotationId)) {
+      this.state.selectedAnnotationId = null;
+    }
+  }
+
+  // ---- 注釈図形（矢印・丸・四角） ----
+
+  public addAnnotation(annotation: Annotation, select = true): void {
+    this.state.annotations = [...this.state.annotations, annotation];
+    if (select) this.state.selectedAnnotationId = annotation.id;
+    this.pushHistory();
+    this.notify();
+  }
+
+  /** recordHistory=false はドラッグ中の途中経過。離したら commitHistory() で1段として残す。 */
+  public updateAnnotation(id: string, updates: Partial<Annotation>, recordHistory = true): void {
+    let changed = false;
+    this.state.annotations = this.state.annotations.map((a) => {
+      if (a.id !== id) return a;
+      changed = true;
+      return { ...a, ...updates };
+    });
+    if (!changed) return;
+    if (recordHistory) this.pushHistory();
+    this.notify();
+  }
+
+  public removeAnnotation(id: string): void {
+    const next = this.state.annotations.filter((a) => a.id !== id);
+    if (next.length === this.state.annotations.length) return;
+    this.state.annotations = next;
+    if (this.state.selectedAnnotationId === id) this.state.selectedAnnotationId = null;
+    this.pushHistory();
+    this.notify();
+  }
+
+  public setSelectedAnnotationId(id: string | null): void {
+    if (this.state.selectedAnnotationId === id) return;
+    this.state.selectedAnnotationId = id;
+    this.notify();
+  }
+
+  /** 記録せずに進めた変更（図形のドラッグなど）を、戻す1段として確定する。 */
+  public commitHistory(): void {
+    this.pushHistory();
+    this.notify();
+  }
+
+  private pushHistory(): void {
     // 現在の履歴以降を切り捨て
     const nextHistory = this.state.history.slice(0, this.state.historyIndex + 1);
-    nextHistory.push(JSON.parse(JSON.stringify(boxes)));
+    nextHistory.push(JSON.parse(JSON.stringify({ boxes: this.state.boxes, annotations: this.state.annotations })));
     // 最大30件
     if (nextHistory.length > 30) {
       nextHistory.shift();

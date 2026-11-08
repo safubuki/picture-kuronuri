@@ -1,4 +1,5 @@
 import type { RedactBox, RedactType } from "./redactionEngine";
+import { type Annotation, drawAnnotations } from "./annotations";
 
 export type RedactStyle = "blackout" | "whiteout" | "mosaic" | "blur";
 
@@ -9,6 +10,8 @@ export interface CanvasRendererOptions {
   showDisabledBoxes: boolean;
   activeHoverBoxId: string | null;
   selectedBoxId: string | null;
+  /** 複数選択中の黒塗り。selectedBoxId と同じ強調で描く。 */
+  selectedBoxIds?: string[];
 }
 
 export const DEFAULT_RENDERER_OPTIONS: CanvasRendererOptions = {
@@ -28,7 +31,8 @@ export function renderRedactedCanvas(
   sourceImage: HTMLImageElement | HTMLCanvasElement,
   boxes: RedactBox[],
   options: CanvasRendererOptions = DEFAULT_RENDERER_OPTIONS,
-  isExport: boolean = false
+  isExport: boolean = false,
+  annotations: Annotation[] = []
 ): void {
   const width = sourceImage.width;
   const height = sourceImage.height;
@@ -89,14 +93,19 @@ export function renderRedactedCanvas(
     ctx.restore();
   }
 
+  // 注釈図形（矢印・丸・四角）は黒塗りの上に重ね、書き出しにも含める
+  drawAnnotations(ctx, annotations);
+
   // エクスポート（保存・コピー用）なら、操作用枠線や無効化ボックスなどのデバッグUIは描画しない
   if (isExport) return;
 
   // 3. 編集UIオーバーレイ（枠線、無効化表示、ホバー強調）
+  const selectedIds = new Set(options.selectedBoxIds ?? []);
+  if (options.selectedBoxId) selectedIds.add(options.selectedBoxId);
   for (const box of boxes) {
     const { x, y, width: bw, height: bh } = box.rect;
     const isHovered = box.id === options.activeHoverBoxId;
-    const isSelected = box.id === options.selectedBoxId;
+    const isSelected = selectedIds.has(box.id);
 
     if (!box.enabled && !options.showDisabledBoxes) continue;
 
@@ -110,10 +119,10 @@ export function renderRedactedCanvas(
     }
 
     if (!box.enabled) {
-      // 解除されたボックスは点線と薄い半透明で表示
+      // 解除されたボックスは点線と薄い半透明で表示（選択中は青い点線）
       ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.7)";
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = isSelected ? "#38bdf8" : "rgba(239, 68, 68, 0.7)";
+      ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.strokeRect(x, y, bw, bh);
       ctx.fillStyle = "rgba(239, 68, 68, 0.12)";
       ctx.fillRect(x, y, bw, bh);

@@ -3,6 +3,16 @@ import { analyzeImageForRedaction, type RedactBox } from "./engine/redactionEngi
 import { renderRedactedCanvas, findBoxAtPosition, renderLineGuides } from "./engine/canvasRenderer";
 import { calculateLineSnap, type SnapResult } from "./engine/lineSnap";
 import { extendRectOnSameLine, rectsShareRedactionLine } from "./engine/manualStroke";
+import {
+  type Annotation,
+  type ShapeKind,
+  type ShapeWidthLevel,
+  drawAnnotation,
+  drawAnnotationSelection,
+  findAnnotationAt,
+  isAnnotationLargeEnough,
+  strokeWidthFor
+} from "./engine/annotations";
 import { generateChatSampleImage, generateDashboardSampleImage, generateSkewedChatSampleImage } from "./utils/sampleImages";
 import { copyCanvasToClipboard, downloadCanvasImage, copyAiPromptToClipboard } from "./utils/exportUtils";
 import { rotateImage90, rotateAndDeskewImage, enhanceImageForOcr } from "./utils/imageEnhance";
@@ -75,6 +85,9 @@ const deskewValDisplay = document.getElementById("deskewValDisplay") as HTMLSpan
 // Toolbar Elements
 const toolSelectMode = document.getElementById("toolSelectMode") as HTMLButtonElement;
 const toolDrawMode = document.getElementById("toolDrawMode") as HTMLButtonElement;
+const toolShapeMode = document.getElementById("toolShapeMode") as HTMLButtonElement | null;
+const shapeBar = document.getElementById("shapeBar") as HTMLDivElement | null;
+const btnShapeDelete = document.getElementById("btnShapeDelete") as HTMLButtonElement | null;
 const selectRedactStyle = document.getElementById("selectRedactStyle") as HTMLSelectElement;
 const sampleDropdownMenu = document.getElementById("sampleDropdownMenu") as HTMLDivElement | null;
 const menuSampleChat = document.getElementById("menuSampleChat") as HTMLButtonElement | null;
@@ -104,6 +117,51 @@ const btnPopoverMoveUp = document.getElementById("btnPopoverMoveUp") as HTMLButt
 const btnPopoverMoveDown = document.getElementById("btnPopoverMoveDown") as HTMLButtonElement;
 const btnPopoverFontSmaller = document.getElementById("btnPopoverFontSmaller") as HTMLButtonElement;
 const btnPopoverFontLarger = document.getElementById("btnPopoverFontLarger") as HTMLButtonElement;
+const popoverTitle = document.getElementById("popoverTitle") as HTMLSpanElement | null;
+const popoverDeleteText = document.getElementById("popoverDeleteText") as HTMLSpanElement | null;
+const btnPopoverSelectSame = document.getElementById("btnPopoverSelectSame") as HTMLButtonElement | null;
+const popoverMultiHint = document.getElementById("popoverMultiHint") as HTMLParagraphElement | null;
+const POPOVER_LABEL_PLACEHOLDER = popoverCustomLabel?.placeholder ?? "";
+const multiSelectHint = document.getElementById("multiSelectHint") as HTMLDivElement | null;
+const btnMultiSelectHintClose = document.getElementById("btnMultiSelectHintClose") as HTMLButtonElement | null;
+
+/** Mac では Ctrl の代わりに ⌘ を案内する（どちらでも動く）。 */
+const MULTI_SELECT_KEY = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
+const MULTI_SELECT_HINT_KEY = "kuronuri_multi_select_hint_done";
+
+/** 一度でも複数選択できたか、ヒントを閉じたか。そうなったらもう出さない。 */
+function isMultiSelectHintDone(): boolean {
+  try {
+    return localStorage.getItem(MULTI_SELECT_HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markMultiSelectHintDone(): void {
+  try {
+    localStorage.setItem(MULTI_SELECT_HINT_KEY, "1");
+  } catch {
+    // 保存できない環境では、この表示中だけ隠す
+  }
+  if (multiSelectHint) multiSelectHint.hidden = true;
+}
+
+/**
+ * 画像エリア左上に、複数選択のやり方を小さく出す。
+ * PC の選択/移動モードで黒塗りが2件以上あり、何も選んでいないときだけ。
+ */
+function syncMultiSelectHint(state: AppState): void {
+  if (!multiSelectHint) return;
+  multiSelectHint.hidden =
+    isMultiSelectHintDone() ||
+    !state.sourceImage ||
+    state.mode !== "select" ||
+    state.boxes.length < 2 ||
+    state.selectedBoxIds.length > 0 ||
+    isPerspectiveMode ||
+    !window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
 
 // Action Buttons
 const btnTakePhoto = document.getElementById("btnTakePhoto") as HTMLButtonElement;
@@ -152,6 +210,7 @@ const toastMessage = document.getElementById("toastMessage") as HTMLSpanElement;
 // Mobile Quick Bar & Sheet Drawer Elements
 const btnMobileSelect = document.getElementById("btnMobileSelect") as HTMLButtonElement | null;
 const btnMobileDraw = document.getElementById("btnMobileDraw") as HTMLButtonElement | null;
+const btnMobileShape = document.getElementById("btnMobileShape") as HTMLButtonElement | null;
 const btnMobileCopy = document.getElementById("btnMobileCopy") as HTMLButtonElement | null;
 const btnMobileDownload = document.getElementById("btnMobileDownload") as HTMLButtonElement | null;
 const btnHeaderMenu = document.getElementById("btnHeaderMenu") as HTMLButtonElement | null;
@@ -189,6 +248,18 @@ const LONG_PRESS_MS = 450;
 /** 重なるか、これだけの隙間（行の高さに対する割合）までの線は既存の黒塗りを広げる。 */
 const STROKE_JOIN_GAP = 0.3;
 let drawHintShown = false;
+let shapeHintShown = false;
+
+/** 次に描く図形の種類・色・太さ。図形を選ぶと、その図形の設定に合わせる。 */
+let currentShapeKind: ShapeKind = "arrow";
+let currentShapeColor = "#ef4444";
+let currentShapeWidth: ShapeWidthLevel = "medium";
+
+/** 図形モードでの操作中の状態。draw は新しく描いている途中、move は既存の図形を動かしている途中。 */
+let shapeGesture:
+  | { kind: "draw"; preview: Annotation }
+  | { kind: "move"; id: string; startX: number; startY: number; origin: Annotation; moved: boolean }
+  | null = null;
 let edgeAdjust: "start" | "end" | null = null;
 let edgeAdjustBoxId: string | null = null;
 let edgeFixedX = 0;
@@ -224,6 +295,60 @@ window.addEventListener("keyup", (e) => {
     isSpaceDown = false;
   }
 });
+
+/**
+ * 選択/移動モードで Ctrl / Shift を押している間は、編集パネルを半透明にしてクリックを素通りさせる。
+ * パネルの下に隠れた黒塗りも、続けて Ctrl + クリックで選べるようにするため。
+ */
+function syncPopoverPassThrough(e: KeyboardEvent | MouseEvent | null): void {
+  if (!boxEditorPopover) return;
+  const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+  const held = !!e && (e.ctrlKey || e.metaKey || e.shiftKey);
+  boxEditorPopover.classList.toggle("is-pass-through", held && !typing && appState.getState().mode === "select");
+  multiSelectHint?.classList.toggle("is-active", held && !typing);
+}
+window.addEventListener("keydown", (e) => syncPopoverPassThrough(e));
+window.addEventListener("keyup", (e) => syncPopoverPassThrough(e));
+window.addEventListener("blur", () => syncPopoverPassThrough(null));
+
+window.addEventListener("keydown", (e) => {
+  const target = e.target as HTMLElement;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+  // Ctrl + A：すべての黒塗りを選んで一括設定
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && appState.getState().mode === "select" && appState.getState().boxes.length > 0) {
+    e.preventDefault();
+    selectAllBoxes();
+    return;
+  }
+  // Delete / Backspace：図形モードで選んでいる図形を消す
+  if ((e.key === "Delete" || e.key === "Backspace") && appState.getState().mode === "shape" && appState.getState().selectedAnnotationId) {
+    e.preventDefault();
+    deleteSelectedAnnotation();
+    return;
+  }
+  // Esc：選択を解除して編集パネルを閉じる
+  if (e.key === "Escape" && appState.getState().selectedBoxIds.length > 0) {
+    closeBoxEditor();
+  }
+  if (e.key === "Escape" && appState.getState().selectedAnnotationId) {
+    selectAnnotation(null);
+    updateCanvasRender();
+  }
+});
+
+/**
+ * 選択/移動モードで Ctrl / Shift を押しながらの操作。
+ * 動かさずに離せばその黒塗りを選択に足す/外す、ドラッグすれば囲んだ黒塗りを選択に足す。
+ */
+let selectGesture: {
+  clientX: number;
+  clientY: number;
+  x: number;
+  y: number;
+  boxId: string | null;
+  base: string[];
+  marquee: { x: number; y: number; width: number; height: number } | null;
+} | null = null;
 
 // Pinch Zoom State Variables (Mobile Multi-touch)
 let isPinching = false;
@@ -928,6 +1053,8 @@ function applyCanvasTransform(): void {
  */
 function updateCanvasRender(): void {
   const state = appState.getState();
+  // 4隅調整の出入りは状態の通知を通らないので、描き直しのたびにヒントの表示も合わせる
+  syncMultiSelectHint(state);
   if (!state.sourceImage) {
     emptyDropZone.style.display = "flex";
     renderCanvas.style.display = "none";
@@ -962,8 +1089,9 @@ function updateCanvasRender(): void {
     ctx,
     state.sourceImage,
     state.boxes,
-    { ...state.rendererOptions, selectedBoxId: state.selectedBoxId },
-    false
+    { ...state.rendererOptions, selectedBoxId: state.selectedBoxId, selectedBoxIds: state.selectedBoxIds },
+    false,
+    state.annotations
   );
 
   // 検出済みの文字行ガイド。手動黒塗りの位置合わせに使う。
@@ -1015,30 +1143,75 @@ function updateCanvasRender(): void {
     ctx.restore();
   }
 
+  // 図形モード：描きかけの図形と、選択中の図形の目印
+  if (shapeGesture?.kind === "draw") drawAnnotation(ctx, shapeGesture.preview);
+  if (state.mode === "shape" && state.selectedAnnotationId) {
+    const selected = state.annotations.find((a) => a.id === state.selectedAnnotationId);
+    if (selected) drawAnnotationSelection(ctx, selected, state.zoom);
+  }
+
+  // Ctrl / Shift + ドラッグの範囲選択枠
+  if (selectGesture?.marquee) {
+    const m = selectGesture.marquee;
+    ctx.save();
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = Math.max(1, 1.5 / Math.max(0.5, state.zoom));
+    ctx.setLineDash([6, 4]);
+    ctx.fillStyle = "rgba(56, 189, 248, 0.12)";
+    ctx.fillRect(m.x, m.y, m.width, m.height);
+    ctx.strokeRect(m.x, m.y, m.width, m.height);
+    ctx.restore();
+  }
+
   drawManualEdgeHandles(ctx);
 }
 
+/** 選択中の黒塗り（並びは選んだ順）。 */
+function selectedBoxes(): RedactBox[] {
+  const state = appState.getState();
+  const byId = new Map(state.boxes.map((box) => [box.id, box]));
+  return state.selectedBoxIds.map((id) => byId.get(id)).filter((box): box is RedactBox => !!box);
+}
+
+/** 選択中の黒塗りをすべて囲む矩形（画像座標）。 */
+function selectionBounds(boxes: RedactBox[]): RedactBox["rect"] | null {
+  if (boxes.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const { rect } of boxes) {
+    minX = Math.min(minX, rect.x);
+    minY = Math.min(minY, rect.y);
+    maxX = Math.max(maxX, rect.x + rect.width);
+    maxY = Math.max(maxY, rect.y + rect.height);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** 一括設定で、項目名を選び直したか。触っていなければ各黒塗りの項目名はそのまま残す。 */
+let popoverLabelTouched = false;
+
 /**
- * 黒塗り編集ポップオーバーの表示と位置合わせ
+ * 黒塗り編集ポップオーバーの表示と位置合わせ。複数選択中は全件を囲む位置に出す。
+ * keepPosition: すでに開いていれば位置を動かさない（選択した黒塗りが隠れるときだけ置き直す）。
  */
-function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
+function showBoxEditorPopover(opts: { preserveFields?: boolean; keepPosition?: boolean } = {}): void {
   if (!boxEditorPopover || !renderCanvas || !canvasViewport) return;
-  const cRect = renderCanvas.getBoundingClientRect();
-  const vRect = canvasViewport.getBoundingClientRect();
-
-  const scaleX = cRect.width / (renderCanvas.width || 1);
-  const scaleY = cRect.height / (renderCanvas.height || 1);
-
-  // Viewport内の相対座標を計算
-  const boxLeft = cRect.left - vRect.left + box.rect.x * scaleX;
-  const boxTop = cRect.top - vRect.top + box.rect.y * scaleY;
-  const boxW = box.rect.width * scaleX;
-  const boxH = box.rect.height * scaleY;
+  const boxes = selectedBoxes();
+  const bounds = selectionBounds(boxes);
+  if (!bounds) return;
+  const isMulti = boxes.length > 1;
+  const wasOpen = boxEditorPopover.style.display !== "none";
 
   boxEditorPopover.style.display = "block";
   canvasViewport.classList.add("editor-open");
   const draftHint = document.getElementById("popoverDraftHint");
-  if (draftHint) draftHint.hidden = !(box.isManual && appState.getState().mode === "draw");
+  if (draftHint) draftHint.hidden = isMulti || !(boxes[0].isManual && appState.getState().mode === "draw");
+  syncPopoverSelectionUi(boxes);
+
+  const keep =
+    opts.keepPosition && wasOpen && !boxEditorPopover.classList.contains("is-docked") && !boxes.some(isBoxHiddenByPopover);
 
   // 狭い画面では編集パネルを下端に固定し、上の画像を見えるようにする
   if (window.matchMedia("(max-width: 768px)").matches) {
@@ -1047,8 +1220,19 @@ function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
     boxEditorPopover.style.top = "";
     boxEditorPopover.style.right = "";
     boxEditorPopover.style.bottom = "";
-  } else {
+  } else if (!keep) {
     boxEditorPopover.classList.remove("is-docked");
+    const cRect = renderCanvas.getBoundingClientRect();
+    const vRect = canvasViewport.getBoundingClientRect();
+    const scaleX = cRect.width / (renderCanvas.width || 1);
+    const scaleY = cRect.height / (renderCanvas.height || 1);
+
+    // Viewport内の相対座標を計算
+    const boxLeft = cRect.left - vRect.left + bounds.x * scaleX;
+    const boxTop = cRect.top - vRect.top + bounds.y * scaleY;
+    const boxW = bounds.width * scaleX;
+    const boxH = bounds.height * scaleY;
+
     const popoverW = boxEditorPopover.offsetWidth || 290;
     const popoverH = boxEditorPopover.offsetHeight || 260;
 
@@ -1070,27 +1254,63 @@ function showBoxEditorPopover(box: RedactBox, preserveFields = false): void {
     boxEditorPopover.style.bottom = "";
   }
 
-  if (preserveFields) return;
-
-  // 入力欄とトグル表示の同期
-  popoverCustomLabel.value = box.label || "";
-  if (popoverToggleText) {
-    popoverToggleText.textContent = box.enabled ? "保護を一時解除" : "保護を再適用";
-  }
-
-  syncPopoverChips(box.label ?? "");
+  if (opts.preserveFields) return;
+  syncPopoverFields(boxes);
 }
 
-/** 入力中のラベルに一致するチップだけを選択状態にする。 */
-function syncPopoverChips(label: string): void {
+/** 件数に応じて見出し・削除ボタン・「同じ項目を選択」・操作ヒントを切り替える。 */
+function syncPopoverSelectionUi(boxes: RedactBox[]): void {
+  const isMulti = boxes.length > 1;
+  if (popoverTitle) popoverTitle.textContent = isMulti ? `${boxes.length}件の黒塗りをまとめて設定` : "黒塗りの項目を設定";
+  if (popoverDeleteText) popoverDeleteText.textContent = isMulti ? `${boxes.length}件削除` : "削除";
+  btnPopoverDelete?.setAttribute("title", isMulti ? "選択中の黒塗りをすべて削除" : "この黒塗りを完全に削除");
+
+  // 選択中と同じ項目名の黒塗りがほかにもあれば、まとめて選べるようにする
+  if (btnPopoverSelectSame) {
+    const labels = new Set(boxes.map((box) => box.label ?? ""));
+    const selected = new Set(boxes.map((box) => box.id));
+    const label = labels.size === 1 ? [...labels][0] : null;
+    const extra = label === null
+      ? 0
+      : appState.getState().boxes.filter((box) => !selected.has(box.id) && (box.label ?? "") === label).length;
+    btnPopoverSelectSame.hidden = extra === 0;
+    if (extra > 0) {
+      btnPopoverSelectSame.textContent = `「${label || "文字なし"}」の黒塗りをすべて選択（+${extra}件）`;
+    }
+  }
+
+  // マウス操作の端末で、1件だけ選んでいるときに複数選択のやり方を案内する
+  if (popoverMultiHint) {
+    popoverMultiHint.hidden = isMulti || !window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  }
+}
+
+/** 入力欄・チップ・保護トグルを選択中の黒塗りに合わせる。keepTypedLabel なら選び直した項目名は残す。 */
+function syncPopoverFields(boxes: RedactBox[], keepTypedLabel = false): void {
+  const labels = new Set(boxes.map((box) => box.label ?? ""));
+  const mixed = labels.size > 1;
+  if (!(keepTypedLabel && popoverLabelTouched)) {
+    popoverLabelTouched = false;
+    popoverCustomLabel.value = mixed ? "" : ([...labels][0] ?? "");
+    popoverCustomLabel.placeholder = mixed ? "項目がバラバラです（選ぶと全件そろえます）" : POPOVER_LABEL_PLACEHOLDER;
+    syncPopoverChips(mixed ? null : popoverCustomLabel.value);
+  }
+  if (popoverToggleText) {
+    popoverToggleText.textContent = boxes.some((box) => box.enabled) ? "保護を一時解除" : "保護を再適用";
+  }
+}
+
+/** 入力中のラベルに一致するチップだけを選択状態にする。null ならどれも選ばない。 */
+function syncPopoverChips(label: string | null): void {
   if (!boxEditorPopover) return;
   const chips = boxEditorPopover.querySelectorAll<HTMLButtonElement>(".popover-chip");
   chips.forEach((chip) => {
-    chip.classList.toggle("active", chip.getAttribute("data-label") === label);
+    chip.classList.toggle("active", label !== null && chip.getAttribute("data-label") === label);
   });
 }
 
 function hideBoxEditorPopover(): void {
+  popoverLabelTouched = false;
   if (boxEditorPopover) {
     boxEditorPopover.style.display = "none";
     boxEditorPopover.classList.remove("is-docked");
@@ -1110,10 +1330,229 @@ function rotationForManualStroke(snap: SnapResult | null): number | undefined {
   return angle;
 }
 
+/** 画面上の px を画像座標の長さに直す（拡大率によらず同じ手応えにする）。 */
+function screenToImageLength(px: number): number {
+  const view = renderCanvas.getBoundingClientRect();
+  return px * (renderCanvas.width / (view.width || 1));
+}
+
+function annotationAtPoint(x: number, y: number): Annotation | null {
+  const tolerance = screenToImageLength(window.matchMedia("(pointer: coarse)").matches ? 16 : 9);
+  return findAnnotationAt(appState.getState().annotations, x, y, tolerance);
+}
+
+function selectAnnotation(annotation: Annotation | null): void {
+  appState.setSelectedAnnotationId(annotation?.id ?? null);
+  if (annotation) {
+    // 選んだ図形の設定をバーに映す。続けて描く図形も同じ見た目になる。
+    currentShapeKind = annotation.kind;
+    currentShapeColor = annotation.color;
+    const img = appState.getState().sourceImage;
+    if (img) {
+      const levels: ShapeWidthLevel[] = ["thin", "medium", "thick"];
+      currentShapeWidth = levels.reduce((best, level) =>
+        Math.abs(strokeWidthFor(level, img.width, img.height) - annotation.width) <
+        Math.abs(strokeWidthFor(best, img.width, img.height) - annotation.width) ? level : best
+      );
+    }
+  }
+  syncShapeBar();
+}
+
+function beginShapeGesture(x: number, y: number): void {
+  const state = appState.getState();
+  const img = state.sourceImage;
+  if (!img) return;
+  stopPanInertia();
+  const hit = annotationAtPoint(x, y);
+  if (hit) {
+    selectAnnotation(hit);
+    shapeGesture = { kind: "move", id: hit.id, startX: x, startY: y, origin: { ...hit }, moved: false };
+    renderCanvas.style.cursor = "move";
+  } else {
+    selectAnnotation(null);
+    shapeGesture = {
+      kind: "draw",
+      preview: {
+        id: `shape-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        kind: currentShapeKind,
+        x1: x,
+        y1: y,
+        x2: x,
+        y2: y,
+        color: currentShapeColor,
+        width: strokeWidthFor(currentShapeWidth, img.width, img.height)
+      }
+    };
+  }
+  renderCanvas.classList.add("is-interacting");
+  updateCanvasRender();
+}
+
+function moveShapeGesture(x: number, y: number): void {
+  const gesture = shapeGesture;
+  if (!gesture) return;
+  if (gesture.kind === "draw") {
+    gesture.preview.x2 = x;
+    gesture.preview.y2 = y;
+  } else {
+    const dx = x - gesture.startX;
+    const dy = y - gesture.startY;
+    if (!gesture.moved && Math.hypot(dx, dy) < screenToImageLength(3)) return;
+    gesture.moved = true;
+    const o = gesture.origin;
+    appState.updateAnnotation(gesture.id, { x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy }, false);
+  }
+  updateCanvasRender();
+}
+
+function endShapeGesture(): void {
+  const gesture = shapeGesture;
+  shapeGesture = null;
+  renderCanvas.classList.remove("is-interacting");
+  if (!gesture) return;
+  if (gesture.kind === "draw") {
+    // 描いた直後の図形は選ばない。続けて種類や色を変えても、いま描いた図形は変わらない。
+    // 変えたいときは、その図形の線を押して選んでから。
+    if (isAnnotationLargeEnough(gesture.preview, screenToImageLength(8))) {
+      appState.addAnnotation(gesture.preview, false);
+      syncShapeBar();
+    }
+  } else if (gesture.moved) {
+    appState.commitHistory();
+  }
+  syncDrawCursor();
+  updateCanvasRender();
+}
+
+/** 図形バーのボタン（種類・色・太さ・削除）の見た目を今の設定に合わせる。 */
+function syncShapeBar(): void {
+  if (!shapeBar) return;
+  shapeBar.querySelectorAll<HTMLButtonElement>("[data-kind]").forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.kind === currentShapeKind)
+  );
+  shapeBar.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.color === currentShapeColor)
+  );
+  shapeBar.querySelectorAll<HTMLButtonElement>("[data-width]").forEach((btn) =>
+    btn.classList.toggle("active", btn.dataset.width === currentShapeWidth)
+  );
+  if (btnShapeDelete) btnShapeDelete.disabled = !appState.getState().selectedAnnotationId;
+}
+
+/** 図形バーで設定を変える。図形を選んでいれば、その図形にもすぐ反映する。 */
+function applyShapeSetting(patch: { kind?: ShapeKind; color?: string; width?: ShapeWidthLevel }): void {
+  if (patch.kind) currentShapeKind = patch.kind;
+  if (patch.color) currentShapeColor = patch.color;
+  if (patch.width) currentShapeWidth = patch.width;
+  const state = appState.getState();
+  const selected = state.annotations.find((a) => a.id === state.selectedAnnotationId);
+  if (selected && state.sourceImage) {
+    const updates: Partial<Annotation> = {};
+    if (patch.kind && patch.kind !== selected.kind) updates.kind = patch.kind;
+    if (patch.color && patch.color !== selected.color) updates.color = patch.color;
+    if (patch.width) {
+      const width = strokeWidthFor(patch.width, state.sourceImage.width, state.sourceImage.height);
+      if (width !== selected.width) updates.width = width;
+    }
+    if (Object.keys(updates).length > 0) appState.updateAnnotation(selected.id, updates);
+  }
+  syncShapeBar();
+  updateCanvasRender();
+}
+
+function deleteSelectedAnnotation(): void {
+  const id = appState.getState().selectedAnnotationId;
+  if (!id) return;
+  appState.removeAnnotation(id);
+  syncShapeBar();
+  updateCanvasRender();
+  showToast("🗑️ 図形を削除しました");
+}
+
+/** 範囲選択の枠と重なる黒塗り。 */
+function boxesInMarquee(m: { x: number; y: number; width: number; height: number }): string[] {
+  return appState.getState().boxes
+    .filter(({ rect }) => rect.x < m.x + m.width && rect.x + rect.width > m.x && rect.y < m.y + m.height && rect.y + rect.height > m.y)
+    .map((box) => box.id);
+}
+
+function beginSelectGesture(e: MouseEvent, x: number, y: number): void {
+  const state = appState.getState();
+  selectGesture = {
+    clientX: e.clientX,
+    clientY: e.clientY,
+    x,
+    y,
+    boxId: findBoxAtPosition(state.boxes, x, y)?.id ?? null,
+    base: [...state.selectedBoxIds],
+    marquee: null
+  };
+}
+
+function moveSelectGesture(clientX: number, clientY: number, x: number, y: number): void {
+  const gesture = selectGesture;
+  if (!gesture) return;
+  if (!gesture.marquee && Math.hypot(clientX - gesture.clientX, clientY - gesture.clientY) < GESTURE_SLOP_PX) return;
+  if (!gesture.marquee) hideBoxEditorPopover();
+  gesture.marquee = {
+    x: Math.min(gesture.x, x),
+    y: Math.min(gesture.y, y),
+    width: Math.abs(x - gesture.x),
+    height: Math.abs(y - gesture.y)
+  };
+  // 枠に入った黒塗りをその場で強調する（離すまで編集パネルは出さない）
+  appState.setSelection([...gesture.base, ...boxesInMarquee(gesture.marquee)], appState.getState().selectedBoxId);
+  updateCanvasRender();
+}
+
+function endSelectGesture(): void {
+  const gesture = selectGesture;
+  selectGesture = null;
+  if (!gesture) return;
+  if (gesture.marquee) {
+    const ids = [...gesture.base, ...boxesInMarquee(gesture.marquee)];
+    openSelectionEditor(ids, appState.getState().selectedBoxId);
+    if (ids.length > 1) showToast(`${new Set(ids).size}件を選択しました`);
+    return;
+  }
+  if (!gesture.boxId) {
+    updateCanvasRender();
+    return;
+  }
+  const id = gesture.boxId;
+  const removed = gesture.base.includes(id);
+  const ids = removed ? gesture.base.filter((item) => item !== id) : [...gesture.base, id];
+  // 外した黒塗りが基準だった場合は、setSelection が残りの最後の1件を基準にする
+  openSelectionEditor(ids, removed ? appState.getState().selectedBoxId : id);
+}
+
+/** 選択/移動モードで、すべての黒塗りを選んで一括設定を開く。 */
+function selectAllBoxes(): void {
+  const state = appState.getState();
+  if (state.mode !== "select" || state.boxes.length === 0) return;
+  openSelectionEditor(state.boxes.map((box) => box.id), state.selectedBoxId);
+  showToast(`${state.boxes.length}件すべてを選択しました`);
+}
+
 /** 黒塗りの項目設定を開く。線を引いたあと、その黒塗りをタップしたときだけ開く。 */
 function openBoxEditor(box: RedactBox): void {
   appState.setSelectedBoxId(box.id);
-  showBoxEditorPopover(box);
+  showBoxEditorPopover();
+}
+
+/** 複数選択を反映して編集パネルを開き直す。選択が空なら閉じる。 */
+function openSelectionEditor(ids: string[], anchorId?: string | null): void {
+  appState.setSelection(ids, anchorId);
+  // 2件以上をまとめて選べたら、やり方は覚えたとみなしてヒントを出さない
+  if (appState.getState().selectedBoxIds.length > 1) markMultiSelectHintDone();
+  if (appState.getState().selectedBoxIds.length === 0) {
+    dismissBoxEditor();
+  } else {
+    showBoxEditorPopover({ keepPosition: true, preserveFields: true });
+    syncPopoverFields(selectedBoxes(), true);
+  }
+  updateCanvasRender();
 }
 
 /** 項目設定を閉じるだけで、モードはそのまま。黒塗追加中なら続けて線を引ける。 */
@@ -1138,7 +1577,8 @@ function syncDrawCursor(): void {
     renderCanvas.style.cursor = "grabbing";
     return;
   }
-  renderCanvas.style.cursor = appState.getState().mode === "draw" ? "crosshair" : "default";
+  const mode = appState.getState().mode;
+  renderCanvas.style.cursor = mode === "draw" || mode === "shape" ? "crosshair" : "default";
 }
 
 function beginPan(clientX: number, clientY: number): void {
@@ -1257,25 +1697,25 @@ function applyEdgeAdjust(canvasX: number): void {
     rect: { x, y: box.rect.y, width, height: box.rect.height }
   }, false);
   const updated = edgeAdjustBox();
-  if (updated && appState.getState().selectedBoxId === updated.id) showBoxEditorPopover(updated, true);
+  if (updated && appState.getState().selectedBoxIds.includes(updated.id)) showBoxEditorPopover({ preserveFields: true });
 }
 
-/** 選んでいる黒塗りの上下だけを置き換える。横の位置と長さはそのまま。 */
+/** 選んでいる黒塗り（複数なら全件）の上下だけを置き換える。横の位置と長さはそのまま。 */
 function updateSelectedBoxVertical(next: (rect: RedactBox["rect"]) => { y: number; height: number }): void {
-  const state = appState.getState();
-  const box = state.boxes.find((item) => item.id === state.selectedBoxId);
-  if (!box) return;
-  const { y, height } = next(box.rect);
-  const nextHeight = Math.max(4, Math.min(renderCanvas.height, height));
-  const nextY = Math.max(0, Math.min(renderCanvas.height - nextHeight, y));
-  if (Math.abs(nextY - box.rect.y) < 0.5 && Math.abs(nextHeight - box.rect.height) < 0.5) return;
-  appState.updateBox(box.id, { rect: { ...box.rect, y: nextY, height: nextHeight } });
+  const boxes = selectedBoxes();
+  if (boxes.length === 0) return;
+  appState.updateBoxes(boxes.map((box) => box.id), (box) => {
+    const { y, height } = next(box.rect);
+    const nextHeight = Math.max(4, Math.min(renderCanvas.height, height));
+    const nextY = Math.max(0, Math.min(renderCanvas.height - nextHeight, y));
+    if (Math.abs(nextY - box.rect.y) < 0.5 && Math.abs(nextHeight - box.rect.height) < 0.5) return null;
+    return { rect: { ...box.rect, y: nextY, height: nextHeight } };
+  });
   updateCanvasRender();
   refreshRedactedTextPreview(true);
   // 編集パネルは基本動かさない。連打中にボタンの位置がずれて押せなくなるのを防ぐ。
   // ただし黒塗りがパネルの下に隠れるときだけ、見える位置へ置き直す。
-  const updated = appState.getState().boxes.find((item) => item.id === box.id);
-  if (updated && isBoxHiddenByPopover(updated)) showBoxEditorPopover(updated, true);
+  if (selectedBoxes().some(isBoxHiddenByPopover)) showBoxEditorPopover({ preserveFields: true });
 }
 
 /** 黒塗りが編集パネルと重なって隠れているか（画面上の位置で判定）。 */
@@ -1314,13 +1754,13 @@ const LABEL_SCALE_STEP = 0.1;
 
 /** ラベル文字の大きさを一段階変える。基準サイズ（枠の高さから自動算出）への倍率として保持する。 */
 function adjustBoxLabelScale(direction: 1 | -1): void {
-  const state = appState.getState();
-  const box = state.boxes.find((item) => item.id === state.selectedBoxId);
-  if (!box) return;
-  const current = box.labelScale ?? 1;
-  const next = Math.round(Math.max(LABEL_SCALE_MIN, Math.min(LABEL_SCALE_MAX, current + LABEL_SCALE_STEP * direction)) * 10) / 10;
-  if (next === current) return;
-  appState.updateBox(box.id, { labelScale: next });
+  const ids = appState.getState().selectedBoxIds;
+  if (ids.length === 0) return;
+  appState.updateBoxes(ids, (box) => {
+    const current = box.labelScale ?? 1;
+    const next = Math.round(Math.max(LABEL_SCALE_MIN, Math.min(LABEL_SCALE_MAX, current + LABEL_SCALE_STEP * direction)) * 10) / 10;
+    return next === current ? null : { labelScale: next };
+  });
   updateCanvasRender();
 }
 
@@ -1520,6 +1960,7 @@ function finishManualStroke(): void {
 /** 指が離れずに操作が打ち切られたとき（着信など）。引きかけの線は捨てる。 */
 function abortCanvasGesture(): void {
   cancelDrawGesture();
+  shapeGesture = null;
   if (edgeAdjust) endEdgeAdjust();
   isDrawing = false;
   isRectDrawing = false;
@@ -1536,6 +1977,7 @@ function abortCanvasGesture(): void {
  * UI表示（統計・リスト・ボタン状態）の同期
  */
 function syncUiWithState(state: AppState): void {
+  syncMultiSelectHint(state);
   // プログレス表示
   if (state.isAnalyzing) {
     progressOverlay.style.display = "flex";
@@ -1555,6 +1997,13 @@ function syncUiWithState(state: AppState): void {
   // ツールバーボタンのアクティブ状態
   const selectOn = state.mode === "select";
   const drawOn = state.mode === "draw";
+  const shapeOn = state.mode === "shape";
+  toolShapeMode?.classList.toggle("active", shapeOn);
+  toolShapeMode?.setAttribute("aria-pressed", shapeOn ? "true" : "false");
+  btnMobileShape?.classList.toggle("active", shapeOn);
+  btnMobileShape?.setAttribute("aria-pressed", shapeOn ? "true" : "false");
+  if (shapeBar) shapeBar.hidden = !(shapeOn && state.sourceImage);
+  if (btnShapeDelete) btnShapeDelete.disabled = !state.selectedAnnotationId;
   toolSelectMode.classList.toggle("active", selectOn);
   toolDrawMode.classList.toggle("active", drawOn);
   toolSelectMode.setAttribute("aria-pressed", selectOn ? "true" : "false");
@@ -1947,6 +2396,7 @@ function initEvents(): void {
   // 操作モード切り替え
   toolSelectMode.addEventListener("click", () => {
     cancelDrawGesture();
+    appState.setSelectedAnnotationId(null);
     appState.setMode("select");
     syncDrawCursor();
   });
@@ -1954,6 +2404,7 @@ function initEvents(): void {
   toolDrawMode.addEventListener("click", () => {
     const wasDrawing = appState.getState().mode === "draw";
     dismissBoxEditor();
+    appState.setSelectedAnnotationId(null);
     appState.setMode("draw");
     syncDrawCursor();
     if (!wasDrawing && !drawHintShown && appState.getState().sourceImage) {
@@ -1963,6 +2414,36 @@ function initEvents(): void {
   });
   btnMobileSelect?.addEventListener("click", () => toolSelectMode.click());
   btnMobileDraw?.addEventListener("click", () => toolDrawMode.click());
+
+  multiSelectHint?.querySelectorAll(".msh-key").forEach((key) => { key.textContent = MULTI_SELECT_KEY; });
+  if (popoverMultiHint) {
+    popoverMultiHint.textContent = `${MULTI_SELECT_KEY} + クリックで複数選択、${MULTI_SELECT_KEY} + ドラッグで範囲選択できます。`;
+  }
+  btnMultiSelectHintClose?.addEventListener("click", markMultiSelectHintDone);
+
+  // 図形モード：矢印・丸・四角を描く。黒塗りとは別に、上に重ねて書き出される。
+  toolShapeMode?.addEventListener("click", () => {
+    cancelDrawGesture();
+    dismissBoxEditor();
+    appState.setMode("shape");
+    syncShapeBar();
+    syncDrawCursor();
+    if (!shapeHintShown && appState.getState().sourceImage) {
+      shapeHintShown = true;
+      showToast("ドラッグで図形を描けます。描いた図形の線を押すと、移動・色の変更・削除ができます", 4000);
+    }
+  });
+  btnMobileShape?.addEventListener("click", () => toolShapeMode?.click());
+  shapeBar?.querySelectorAll<HTMLButtonElement>("[data-kind]").forEach((btn) =>
+    btn.addEventListener("click", () => applyShapeSetting({ kind: btn.dataset.kind as ShapeKind }))
+  );
+  shapeBar?.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((btn) =>
+    btn.addEventListener("click", () => applyShapeSetting({ color: btn.dataset.color }))
+  );
+  shapeBar?.querySelectorAll<HTMLButtonElement>("[data-width]").forEach((btn) =>
+    btn.addEventListener("click", () => applyShapeSetting({ width: btn.dataset.width as ShapeWidthLevel }))
+  );
+  btnShapeDelete?.addEventListener("click", deleteSelectedAnnotation);
 
   // 墨消しスタイル切り替え (ドロップダウン)
   if (selectRedactStyle) {
@@ -1983,12 +2464,16 @@ function initEvents(): void {
         if (!appState.getState().selectedBoxId || label === null || !popoverCustomLabel) return;
         // 空のラベルは「文字なし（黒塗りのみ）」
         popoverCustomLabel.value = label;
+        popoverLabelTouched = true;
         syncPopoverChips(label);
       });
     });
 
     if (popoverCustomLabel) {
-      popoverCustomLabel.addEventListener("input", () => syncPopoverChips(popoverCustomLabel.value.trim()));
+      popoverCustomLabel.addEventListener("input", () => {
+        popoverLabelTouched = true;
+        syncPopoverChips(popoverCustomLabel.value.trim());
+      });
       popoverCustomLabel.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -2007,12 +2492,13 @@ function initEvents(): void {
     // 保護の一時解除/再適用
     if (btnPopoverToggle) {
       btnPopoverToggle.addEventListener("click", () => {
-        const state = appState.getState();
-        if (!state.selectedBoxId) return;
-        appState.toggleBox(state.selectedBoxId);
-        const updatedBox = state.boxes.find((b) => b.id === state.selectedBoxId);
-        if (updatedBox && popoverToggleText) {
-          popoverToggleText.textContent = updatedBox.enabled ? "保護を一時解除" : "保護を再適用";
+        const boxes = selectedBoxes();
+        if (boxes.length === 0) return;
+        // 1件でも保護中なら全件を解除、全件解除済みなら全件を再適用
+        const enabled = !boxes.some((box) => box.enabled);
+        appState.updateBoxes(boxes.map((box) => box.id), { enabled });
+        if (popoverToggleText) {
+          popoverToggleText.textContent = enabled ? "保護を一時解除" : "保護を再適用";
         }
         updateCanvasRender();
         refreshRedactedTextPreview(true);
@@ -2021,17 +2507,18 @@ function initEvents(): void {
 
     if (btnPopoverConfirm) {
       btnPopoverConfirm.addEventListener("click", () => {
-        const state = appState.getState();
+        const boxes = selectedBoxes();
+        if (boxes.length === 0) return;
         // 入力欄を空にした場合も、そのまま「文字なし（黒塗りのみ）」として確定する
         const typed = popoverCustomLabel?.value.trim() ?? "";
-        if (state.selectedBoxId) {
-          const current = state.boxes.find((box) => box.id === state.selectedBoxId);
-          if (current && (current.label ?? "") !== typed) {
-            appState.updateBox(state.selectedBoxId, { label: typed, reason: `ユーザー指定 (${typed || "文字なし"})` });
-          }
+        // 項目がバラバラな一括設定で入力欄に触れていなければ、各黒塗りの項目名はそのまま
+        const mixed = new Set(boxes.map((box) => box.label ?? "")).size > 1;
+        if (popoverLabelTouched || !mixed) {
+          appState.updateBoxes(boxes.map((box) => box.id), (box) =>
+            (box.label ?? "") === typed ? null : { label: typed, reason: `ユーザー指定 (${typed || "文字なし"})` }
+          );
         }
-        if (!appState.getState().selectedBoxId) return;
-        showToast("項目を設定しました");
+        showToast(boxes.length > 1 ? `${boxes.length}件の項目を設定しました` : "項目を設定しました");
         closeBoxEditor();
       });
     }
@@ -2039,11 +2526,11 @@ function initEvents(): void {
     // 黒塗りの完全削除
     if (btnPopoverDelete) {
       btnPopoverDelete.addEventListener("click", () => {
-        const state = appState.getState();
-        if (!state.selectedBoxId) return;
-        appState.removeBox(state.selectedBoxId);
+        const ids = [...appState.getState().selectedBoxIds];
+        if (ids.length === 0) return;
+        appState.removeBoxes(ids);
         refreshRedactedTextPreview(true);
-        showToast("🗑️ 黒塗りを削除しました");
+        showToast(ids.length > 1 ? `🗑️ ${ids.length}件の黒塗りを削除しました` : "🗑️ 黒塗りを削除しました");
         closeBoxEditor();
       });
     }
@@ -2053,13 +2540,22 @@ function initEvents(): void {
         closeBoxEditor();
       });
     }
+
+    // 同じ項目名の黒塗りをまとめて選択（スマホでも複数選択できる入口）
+    btnPopoverSelectSame?.addEventListener("click", () => {
+      const state = appState.getState();
+      const labels = new Set(selectedBoxes().map((box) => box.label ?? ""));
+      if (labels.size !== 1) return;
+      const label = [...labels][0];
+      const ids = state.boxes.filter((box) => (box.label ?? "") === label).map((box) => box.id);
+      openSelectionEditor(ids, state.selectedBoxId);
+    });
   }
 
   window.addEventListener("resize", () => {
     if (!boxEditorPopover || boxEditorPopover.style.display === "none") return;
     const state = appState.getState();
-    const box = state.boxes.find((item) => item.id === state.selectedBoxId);
-    if (box) showBoxEditorPopover(box);
+    if (state.selectedBoxIds.length > 0) showBoxEditorPopover({ preserveFields: true });
   });
 
   // 元画像比較（長押しまたはトグル）
@@ -2380,7 +2876,8 @@ function initEvents(): void {
       state.sourceImage,
       state.boxes,
       exportOptions,
-      true
+      true,
+      state.annotations
     );
 
     const res = await copyCanvasToClipboard(exportCanvas);
@@ -2404,7 +2901,8 @@ function initEvents(): void {
       state.sourceImage,
       state.boxes,
       exportOptions,
-      true
+      true,
+      state.annotations
     );
 
     downloadCanvasImage(exportCanvas, `kuronuri_${Date.now()}.png`);
@@ -2673,12 +3171,17 @@ function initEvents(): void {
       return;
     }
 
-    if (drawGesture || isDrawing || isPanning || edgeAdjust) return;
+    if (drawGesture || isDrawing || isPanning || edgeAdjust || shapeGesture) return;
 
     const { x, y } = getCanvasCoordinates(e);
+    if (state.mode === "shape") {
+      renderCanvas.style.cursor = annotationAtPoint(x, y) ? "move" : "crosshair";
+      return;
+    }
     const box = findBoxAtPosition(state.boxes, x, y);
     if (state.mode === "select") {
-      renderCanvas.style.cursor = box ? "pointer" : "grab";
+      const multi = e.ctrlKey || e.metaKey || e.shiftKey;
+      renderCanvas.style.cursor = box ? (multi ? "copy" : "pointer") : (multi ? "crosshair" : "grab");
     } else {
       renderCanvas.style.cursor = manualEdgeAt(x, y) ? "ew-resize" : "crosshair";
     }
@@ -2723,6 +3226,12 @@ function initEvents(): void {
     const { x, y } = getCanvasCoordinates(e);
 
     if (state.mode === "select") {
+      // Ctrl / Shift を押しながら：クリックで選択に足す/外す、ドラッグで範囲選択
+      if (e.ctrlKey || e.metaKey || e.shiftKey) {
+        e.preventDefault();
+        beginSelectGesture(e, x, y);
+        return;
+      }
       const box = findBoxAtPosition(state.boxes, x, y);
       if (box) {
         openBoxEditor(box);
@@ -2733,6 +3242,9 @@ function initEvents(): void {
       }
     } else if (state.mode === "draw") {
       beginDrawGesture(e.clientX, e.clientY, x, y);
+    } else if (state.mode === "shape") {
+      e.preventDefault();
+      beginShapeGesture(x, y);
     }
   });
 
@@ -2742,6 +3254,18 @@ function initEvents(): void {
       const { x, y } = getCanvasCoordinates(e);
       perspectiveCorners[activeCornerKey] = { x, y };
       updateCanvasRender();
+      return;
+    }
+
+    if (selectGesture) {
+      const { x, y } = getCanvasCoordinates(e);
+      moveSelectGesture(e.clientX, e.clientY, x, y);
+      return;
+    }
+
+    if (shapeGesture) {
+      const { x, y } = getCanvasCoordinates(e);
+      moveShapeGesture(x, y);
       return;
     }
 
@@ -2773,6 +3297,16 @@ function initEvents(): void {
       return;
     }
 
+    if (selectGesture) {
+      endSelectGesture();
+      return;
+    }
+
+    if (shapeGesture) {
+      endShapeGesture();
+      return;
+    }
+
     if (drawGesture) {
       endDrawGesture();
       return;
@@ -2800,6 +3334,12 @@ function initEvents(): void {
       e.preventDefault();
       cancelDrawGesture();
       if (edgeAdjust) endEdgeAdjust();
+      // 1本目の指で描き始めた図形は捨て、動かしていた図形は元の位置に戻す
+      if (shapeGesture?.kind === "move" && shapeGesture.moved) {
+        const o = shapeGesture.origin;
+        appState.updateAnnotation(shapeGesture.id, { x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 }, false);
+      }
+      shapeGesture = null;
       isPinching = true;
       isDrawing = false;
       isRectDrawing = false;
@@ -2853,6 +3393,9 @@ function initEvents(): void {
       } else if (state.mode === "draw") {
         e.preventDefault();
         beginDrawGesture(touch.clientX, touch.clientY, x, y);
+      } else if (state.mode === "shape") {
+        e.preventDefault();
+        beginShapeGesture(x, y);
       }
     }
   }, { passive: false });
@@ -2889,6 +3432,13 @@ function initEvents(): void {
       const { x, y } = getCanvasCoordinates(touch);
       perspectiveCorners[activeCornerKey] = { x, y };
       updateCanvasRender();
+      return;
+    }
+
+    if (shapeGesture) {
+      e.preventDefault();
+      const { x, y } = getCanvasCoordinates(touch);
+      moveShapeGesture(x, y);
       return;
     }
 
@@ -2929,6 +3479,11 @@ function initEvents(): void {
         activeCornerKey = null;
         updateCanvasRender();
       }
+      return;
+    }
+
+    if (shapeGesture) {
+      endShapeGesture();
       return;
     }
 

@@ -95,11 +95,14 @@
         <div class="workspace-toolbar">
           <!-- Operation Mode -->
           <div class="tool-group tool-mode-group">
-            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして項目を設定。ドラッグで画面を移動">
+            <button id="toolSelectMode" class="tool-btn active" title="黒塗りをタップして項目を設定。ドラッグで画面を移動。Ctrl + クリック / Ctrl + ドラッグでまとめて選択">
               👆 選択/移動
             </button>
             <button id="toolDrawMode" class="tool-btn" title="文字を横になぞって黒塗りを続けて引けます。縦にさっと動かすとスクロール、長押しで四角く囲めます">
               ✍️ 黒塗追加
+            </button>
+            <button id="toolShapeMode" class="tool-btn" title="矢印・丸・四角を描いて、見てほしい場所を示せます">
+              🖍️ 図形
             </button>
           </div>
 
@@ -136,6 +139,30 @@
           </div>
         </div>
 
+        <!-- Shape Annotation Bar (Shown in shape mode) -->
+        <div id="shapeBar" class="shape-bar" hidden>
+          <div class="shape-bar-group" role="group" aria-label="図形の種類">
+            <button type="button" class="shape-opt-btn active" data-kind="arrow" title="矢印（描き終わりが矢じり）">➜ 矢印</button>
+            <button type="button" class="shape-opt-btn" data-kind="ellipse" title="丸で囲む">◯ 丸</button>
+            <button type="button" class="shape-opt-btn" data-kind="rect" title="四角で囲む">□ 四角</button>
+          </div>
+          <div class="shape-bar-group" role="group" aria-label="色">
+            <button type="button" class="shape-color-btn active" data-color="#ef4444" style="--swatch: #ef4444" title="赤" aria-label="赤"></button>
+            <button type="button" class="shape-color-btn" data-color="#f59e0b" style="--swatch: #f59e0b" title="黄" aria-label="黄"></button>
+            <button type="button" class="shape-color-btn" data-color="#22c55e" style="--swatch: #22c55e" title="緑" aria-label="緑"></button>
+            <button type="button" class="shape-color-btn" data-color="#3b82f6" style="--swatch: #3b82f6" title="青" aria-label="青"></button>
+            <button type="button" class="shape-color-btn" data-color="#ffffff" style="--swatch: #ffffff" title="白" aria-label="白"></button>
+            <button type="button" class="shape-color-btn" data-color="#111827" style="--swatch: #111827" title="黒" aria-label="黒"></button>
+          </div>
+          <div class="shape-bar-group" role="group" aria-label="線の太さ">
+            <button type="button" class="shape-opt-btn" data-width="thin" title="細い線">細</button>
+            <button type="button" class="shape-opt-btn active" data-width="medium" title="ふつうの線">中</button>
+            <button type="button" class="shape-opt-btn" data-width="thick" title="太い線">太</button>
+          </div>
+          <button type="button" id="btnShapeDelete" class="shape-opt-btn shape-delete-btn" title="選択中の図形を削除（Delete キー）" disabled>🗑️ 図形を削除</button>
+          <span class="shape-bar-hint">ドラッグで描く。図形の線を押すと選択・移動、色や太さを変えられます</span>
+        </div>
+
         <!-- Perspective Correction Toolbar (Shown when active) -->
         <div id="perspectiveBar" class="perspective-bar" style="display: none;">
           <div class="perspective-info">
@@ -162,6 +189,11 @@
 
         <!-- Canvas Viewport -->
         <div id="canvasViewport" class="canvas-viewport">
+          <!-- 複数選択のやり方（PCの選択/移動モードで、黒塗りが2件以上あるときだけ表示） -->
+          <div id="multiSelectHint" class="multi-select-hint" hidden>
+            <span class="multi-select-hint-text"><kbd class="msh-key">Ctrl</kbd> + クリックで複数選択 ・ <kbd class="msh-key">Ctrl</kbd> + ドラッグで範囲選択</span>
+            <button type="button" id="btnMultiSelectHintClose" class="multi-select-hint-close" title="このヒントを今後表示しない" aria-label="このヒントを今後表示しない">✕</button>
+          </div>
           <!-- Empty Drop Zone -->
           <div id="emptyDropZone" class="drop-zone">
             <div class="drop-zone-icon">
@@ -204,7 +236,7 @@
             <div class="popover-header">
               <div class="popover-title-wrap">
                 <span class="popover-icon">🏷️</span>
-                <span class="popover-title">黒塗りの項目を設定</span>
+                <span id="popoverTitle" class="popover-title">黒塗りの項目を設定</span>
               </div>
               <button id="btnPopoverClose" class="popover-close-btn" title="閉じる" aria-label="閉じる">✕</button>
             </div>
@@ -239,13 +271,15 @@
               <button type="button" id="btnPopoverFontLarger" class="popover-step-btn" title="ラベルの文字を大きくする">＋ 大きく</button>
             </div>
             <p id="popoverDraftHint" class="popover-draft-hint">両端の丸をドラッグすると長さを変えられます。</p>
+            <button type="button" id="btnPopoverSelectSame" class="popover-select-same-btn" hidden>同じ項目をまとめて選択</button>
+            <p id="popoverMultiHint" class="popover-draft-hint popover-multi-hint" hidden>Ctrl / Shift + クリックで複数選択、Ctrl / Shift + ドラッグで範囲選択できます。</p>
             <button type="button" id="btnPopoverConfirm" class="btn btn-sm btn-primary btn-block popover-confirm-btn">確定</button>
             <div class="popover-actions">
               <button id="btnPopoverToggle" class="btn btn-sm btn-secondary" title="保護の一時解除/再適用">
                 <span id="popoverToggleIcon">👁️</span> <span id="popoverToggleText">保護を解除</span>
               </button>
               <button id="btnPopoverDelete" class="btn btn-sm btn-danger" title="この黒塗りを完全に削除">
-                🗑️ 削除
+                🗑️ <span id="popoverDeleteText">削除</span>
               </button>
             </div>
           </div>
@@ -306,6 +340,9 @@
         </button>
         <button id="btnMobileDraw" class="btn btn-secondary btn-mobile-mode" type="button" title="文字を横になぞって黒塗りを続けて引けます。縦にさっと動かすとスクロール、長押しで四角く囲めます">
           黒塗追加
+        </button>
+        <button id="btnMobileShape" class="btn btn-secondary btn-mobile-mode" type="button" title="矢印・丸・四角を描いて、見てほしい場所を示せます">
+          図形
         </button>
         <button id="btnMobileCopy" class="btn btn-primary btn-mobile-main" title="画像をクリップボードにコピー">
           <span class="action-icon">📋</span>

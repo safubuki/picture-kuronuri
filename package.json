@@ -12,7 +12,8 @@
     "test:redaction": "node tests/redaction-regression.cjs",
     "test:llm": "node tests/local-llm-regression.cjs && node tests/model-cache-regression.cjs",
     "test:manual": "node tests/manual-stroke-regression.cjs",
-    "test": "npm run test:rules && npm run test:ocr && npm run test:faces && npm run test:redaction && npm run test:llm && npm run test:manual",
+    "test:selection": "node tests/selection-shape-regression.cjs",
+    "test": "npm run test:rules && npm run test:ocr && npm run test:faces && npm run test:redaction && npm run test:llm && npm run test:manual && npm run test:selection",
     "preview": "vite preview"
   },
   "devDependencies": {
