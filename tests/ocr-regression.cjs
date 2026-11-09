@@ -54,6 +54,75 @@ async function test(name, run) {
   }
 }
 
+// 実時間を待たず、認識の遅延・停止・遅れて届く進捗を再現する。
+async function withFakeTimers(run) {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map();
+  const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+  globalThis.setTimeout = (callback, delay) => {
+    const id = ++nextId;
+    timers.set(id, { at: now + delay, callback });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => timers.delete(id);
+  try {
+    await run({
+      pending: () => timers.size,
+      advance: async (ms) => {
+        await flush();
+        const target = now + ms;
+        while (true) {
+          const next = [...timers].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+          if (!next) break;
+          const [id, timer] = next;
+          now = timer.at;
+          timers.delete(id);
+          timer.callback();
+          await flush();
+        }
+        now = target;
+        await flush();
+      }
+    });
+    assert.equal(timers.size, 0, "完了後に監視タイマーを残さない");
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+}
+
+function delayedOcr(recognize) {
+  const workers = [];
+  const calls = [];
+  const prepared = { canvas: { width: 2400, height: 3200 }, scale: 2, analysis: { estimatedLineHeight: 16 } };
+  const engine = loadTypeScript("../src/engine/ocr.ts", [], {
+    "tesseract.js": {
+      ...tesseract,
+      createWorker: async (_lang, _oem, options) => {
+        const worker = {
+          options, terminated: false, parameters: [],
+          setParameters: async (params) => { worker.parameters.push(params); },
+          terminate: async () => { worker.terminated = true; },
+          recognize: (input, _options, _output, jobId) => {
+            const call = { input, worker, jobId, progress: (value, id = jobId) => options.logger({ status: "recognizing text", progress: value, userJobId: id }) };
+            calls.push(call);
+            return recognize(call, calls.length);
+          }
+        };
+        workers.push(worker);
+        return worker;
+      }
+    },
+    "./ocrPreprocess": { preprocessForOcr: () => prepared, preprocessForOcrAlternative: () => prepared }
+  });
+  return { engine, workers, calls };
+}
+
+const successfulOcr = () => ({ data: recognition([symbol("山", 100, 140), symbol("田", 140, 180)]) });
+
 (async () => {
   for (const scale of [2, 0.5]) {
     await test(`OCR 縮尺 ${scale} で共有する文字矩形を一度だけ変換する`, () => {
@@ -130,6 +199,131 @@ async function test(name, run) {
     await engine.runOcr({ width: 100, height: 100 });
     assert.equal(calls.filter((value) => value === primaryCanvas || value === alternativeCanvas).length, 1);
   });
+
+  await test("25秒を超える複雑な画像も初回の認識で完了し、成功後のタイマーを解除する", () => withFakeTimers(async (clock) => {
+    const { engine, workers, calls } = delayedOcr(() => new Promise((resolve) => setTimeout(() => resolve(successfulOcr()), 40_000)));
+    const updates = [];
+    const pending = engine.runOcr({ width: 1200, height: 1600 }, (p) => updates.push(p));
+    await clock.advance(40_000);
+    const result = await pending;
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.symbols[0].bbox, { x0: 50, y0: 20, x1: 70, y1: 40 });
+    assert.equal(calls.length, 1);
+    assert.ok(updates.some((p) => p.status.includes("解析を続けています")));
+    assert.equal(clock.pending(), 0);
+    await clock.advance(60_000);
+    assert.equal(workers[0].terminated, false);
+    const second = engine.runOcr("image");
+    await clock.advance(40_000);
+    assert.equal((await second).status, "ok");
+    assert.equal(workers.length, 1, "成功した Worker を次回も再利用する");
+  }));
+
+  await test("進捗が増えている認識は45秒を超えても1分以内なら継続する", () => withFakeTimers(async (clock) => {
+    const { engine, calls } = delayedOcr((call) => new Promise((resolve) => {
+      for (let n = 1; n <= 4; n++) setTimeout(() => call.progress(n / 5), n * 10_000);
+      setTimeout(() => resolve(successfulOcr()), 55_000);
+    }));
+    const pending = engine.runOcr("image");
+    await clock.advance(55_000);
+    assert.equal((await pending).status, "ok");
+    assert.equal(calls.length, 1);
+  }));
+
+  await test("重複・不正・別ジョブの進捗で停止判定を延長せず、自動再試行する", () => withFakeTimers(async (clock) => {
+    const { engine, workers, calls } = delayedOcr((call, count) => {
+      if (count > 1) return Promise.resolve(successfulOcr());
+      setTimeout(() => call.progress(0.2), 10_000);
+      setTimeout(() => {
+        call.progress(0.2);
+        call.progress(0.1);
+        call.progress(NaN);
+        call.progress(2);
+        call.progress(0.9, "old-job");
+      }, 40_000);
+      return new Promise(() => {});
+    });
+    const updates = [];
+    const pending = engine.runOcr("image", (p) => updates.push(p));
+    await clock.advance(54_999);
+    assert.equal(calls.length, 1);
+    await clock.advance(1);
+    assert.equal((await pending).status, "ok");
+    assert.equal(calls.length, 2);
+    assert.equal(workers.length, 2);
+    assert.equal(workers[0].terminated, true);
+    assert.equal(workers[1].terminated, false);
+    assert.ok(updates.some((p) => p.status.includes("自動で再試行")));
+    const updateCount = updates.length;
+    calls[0].progress(1);
+    assert.equal(updates.length, updateCount, "終了したジョブの通知を無視する");
+  }));
+
+  await test("進捗が続いても1回の認識は1分で区切り、新しい Worker で再試行する", () => withFakeTimers(async (clock) => {
+    const { engine, workers, calls } = delayedOcr((call, count) => {
+      if (count > 1) return Promise.resolve(successfulOcr());
+      for (let n = 1; n <= 5; n++) setTimeout(() => call.progress(n / 6), n * 10_000);
+      return new Promise(() => {});
+    });
+    const pending = engine.runOcr("image");
+    await clock.advance(59_999);
+    assert.equal(calls.length, 1);
+    assert.equal(workers[0].terminated, false);
+    await clock.advance(1);
+    assert.equal((await pending).status, "ok");
+    assert.equal(calls.length, 2);
+    assert.equal(workers[0].terminated, true);
+  }));
+
+  await test("2回とも停止した場合は有限時間で終了し、次の読み込みを妨げない", () => withFakeTimers(async (clock) => {
+    const { engine, workers, calls } = delayedOcr((_call, count) => count <= 2 ? new Promise(() => {}) : Promise.resolve(successfulOcr()));
+    const pending = engine.runOcr("image");
+    await clock.advance(90_000);
+    const result = await pending;
+    assert.equal(result.status, "timeout");
+    assert.deepEqual(result.lines, []);
+    assert.equal(calls.length, 2);
+    assert.ok(workers.every((worker) => worker.terminated));
+    assert.equal(clock.pending(), 0);
+    assert.equal((await engine.runOcr("next-image")).status, "ok");
+    assert.equal(workers.length, 3);
+  }));
+
+  await test("認識エラーも1回自動復旧し、失敗した Worker を再利用しない", () => withFakeTimers(async () => {
+    const { engine, workers } = delayedOcr((_call, count) => count === 1 ? Promise.reject(new Error("temporary worker error")) : Promise.resolve(successfulOcr()));
+    assert.equal((await engine.runOcr("image")).status, "ok");
+    assert.equal(workers.length, 2);
+    assert.equal(workers[0].terminated, true);
+  }));
+
+  await test("12秒を超える追加認識も完了を待ち、座標と通常の認識モードを保持する", () => withFakeTimers(async (clock) => {
+    const { engine, workers, calls } = delayedOcr((_call, count) => count === 1 ? Promise.resolve({ data: {} }) : new Promise((resolve) => setTimeout(() => resolve(successfulOcr()), 30_000)));
+    const pending = engine.runOcr({ width: 1200, height: 1600 });
+    await clock.advance(30_000);
+    const result = await pending;
+    assert.equal(result.status, "ok");
+    assert.equal(calls.length, 2);
+    assert.equal(workers.length, 1);
+    assert.equal(workers[0].parameters.at(-1).tessedit_pageseg_mode, tesseract.PSM.SINGLE_BLOCK);
+    assert.deepEqual(result.symbols[0].bbox, { x0: 50, y0: 20, x1: 70, y1: 40 });
+  }));
+
+  for (const hasPrimaryText of [false, true]) {
+    await test(`追加認識が停止した場合は${hasPrimaryText ? "初回の文字行を残す" : "文字なしと誤判定しない"}`, () => withFakeTimers(async (clock) => {
+      const primary = hasPrimaryText ? successfulOcr() : { data: {} };
+      if (hasPrimaryText) primary.data.blocks[0].paragraphs[0].lines[0].confidence = 10;
+      const { engine, calls, workers } = delayedOcr((_call, count) => count === 1 ? Promise.resolve(primary) : new Promise(() => {}));
+      const pending = engine.runOcr({ width: 1200, height: 1600 });
+      await clock.advance(90_000);
+      const result = await pending;
+      assert.equal(result.status, hasPrimaryText ? "low_confidence" : "timeout");
+      assert.equal(result.lines.length, hasPrimaryText ? 1 : 0);
+      assert.ok(result.warnings[0].includes("時間内"));
+      assert.equal(calls.length, 3);
+      assert.ok(workers.every((worker) => worker.terminated));
+      assert.equal(workers[1].parameters.at(-1).tessedit_pageseg_mode, tesseract.PSM.SPARSE_TEXT);
+    }));
+  }
 
   await test("最終クリーニング後も残した文字へ元の矩形を対応させる", async () => {
     const symbols = [symbol("山", 0, 20), symbol(" ", 20, 30), symbol("\v", 30, 40), symbol(" ", 40, 50), symbol("田", 50, 70)];
